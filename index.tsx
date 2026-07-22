@@ -66,7 +66,7 @@ function InventoryDashboard() {
   const router = useRouter()
   const [actionMode, setActionMode] = useState<ActionMode>('snapshot')
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState<'all' | 'attention' | 'ok'>('all')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'attention' | 'risk' | 'ok'>('all')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
@@ -74,8 +74,14 @@ function InventoryDashboard() {
     const query = search.trim().toLowerCase()
     return data.inventory.filter((product) => {
       const matchesSearch = !query || product.name.toLowerCase().includes(query) || product.sku.toLowerCase().includes(query)
-      const needsAttention = product.currentStock <= product.minimumStock || product.activeLots.some((lot) => lot.daysToExpire <= 30)
-      const matchesStatus = statusFilter === 'all' || (statusFilter === 'attention' ? needsAttention : !needsAttention)
+      const hasRisk = product.activeLots.some(lot => lot.willExpireBeforeSale)
+      const needsAttention = product.currentStock <= product.minimumStock || product.activeLots.some((lot) => lot.daysToExpire <= 30) || hasRisk
+      
+      let matchesStatus = true
+      if (statusFilter === 'attention') matchesStatus = needsAttention
+      if (statusFilter === 'risk') matchesStatus = hasRisk
+      if (statusFilter === 'ok') matchesStatus = !needsAttention
+      
       return matchesSearch && matchesStatus
     })
   }, [data.inventory, search, statusFilter])
@@ -129,7 +135,7 @@ function InventoryDashboard() {
         <section className="stats-grid" aria-label="Resumen de inventario">
           <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(data.summary.totalUnits)} detail={`${data.summary.totalProducts} productos activos`} tone="ink" />
           <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(data.summary.expiringSoonUnits)} detail="unidades para priorizar" tone="amber" />
-          <StatCard icon={<AlertTriangle />} label="Bajo mínimo" value={numberFormatter.format(data.summary.lowStockProducts)} detail="productos requieren compra" tone="rose" />
+          <StatCard icon={<AlertTriangle />} label="Riesgo de merma" value={numberFormatter.format(data.summary.riskUnits || 0)} detail="vencerán antes de venderse" tone="rose" />
           <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(data.summary.expiredUnits)} detail={data.summary.expiredUnits ? 'separar y revisar' : 'sin unidades vencidas'} tone="green" />
         </section>
 
@@ -143,6 +149,7 @@ function InventoryDashboard() {
                   <div className="segmented" aria-label="Filtrar inventario">
                     <button className={statusFilter === 'all' ? 'active' : ''} onClick={() => setStatusFilter('all')}>Todos</button>
                     <button className={statusFilter === 'attention' ? 'active' : ''} onClick={() => setStatusFilter('attention')}>Atención</button>
+                    <button className={statusFilter === 'risk' ? 'active' : ''} onClick={() => setStatusFilter('risk')}>Riesgo</button>
                     <button className={statusFilter === 'ok' ? 'active' : ''} onClick={() => setStatusFilter('ok')}>Al día</button>
                   </div>
                 </div>
@@ -154,7 +161,10 @@ function InventoryDashboard() {
                     <article className="product-row" key={product.id}>
                       <div className="product-identity">
                         <span className="sku-tag">{product.sku}</span>
-                        <div><h3>{product.name}</h3><p>{product.latestSnapshotDate ? `Último conteo: ${formatDate(product.latestSnapshotDate)}` : 'Aún sin conteo diario'}</p></div>
+                        <div>
+                          <h3>{product.name}</h3>
+                          <p>{product.latestSnapshotDate ? `Último conteo: ${formatDate(product.latestSnapshotDate)}` : 'Aún sin conteo diario'} · Venta prom: {product.averageDailySales}/día</p>
+                        </div>
                       </div>
                       <div className="stock-number"><strong>{numberFormatter.format(product.currentStock)}</strong><span>{product.unit}</span></div>
                       <div className="lot-stack">
@@ -163,13 +173,15 @@ function InventoryDashboard() {
                             <span className={`expiry-dot ${lot.daysToExpire < 0 ? 'expired' : lot.daysToExpire <= 30 ? 'soon' : ''}`} />
                             <span>{numberFormatter.format(lot.remainingQuantity)} · {formatDate(lot.expirationDate)}</span>
                             <small>{lot.sourceType === 'initial' ? 'Inicial' : lot.sourceReference}</small>
+                            {lot.willExpireBeforeSale && <span className="status-pill danger" style={{marginLeft: 'auto', transform: 'scale(0.8)', padding: '2px 6px'}}>¡No se llegará a vender!</span>}
                           </div>
                         )) : <span className="empty-inline">Sin stock disponible</span>}
                       </div>
                       <div className="row-status">
-                        {product.currentStock <= product.minimumStock ? <span className="status-pill danger"><AlertTriangle size={13} /> Bajo mínimo</span>
+                        {product.activeLots.some(lot => lot.willExpireBeforeSale) ? <span className="status-pill danger"><AlertTriangle size={13} /> Riesgo de merma</span>
+                          : product.currentStock <= product.minimumStock ? <span className="status-pill danger"><AlertTriangle size={13} /> Bajo mínimo</span>
                           : product.activeLots.some((lot) => lot.daysToExpire <= 30) ? <span className="status-pill warning"><CalendarClock size={13} /> Revisar vencimiento</span>
-                            : <span className="status-pill success"><Check size={13} /> Al día</span>}
+                          : <span className="status-pill success"><Check size={13} /> Al día</span>}
                       </div>
                     </article>
                   ))}
