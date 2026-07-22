@@ -43,3 +43,4 @@ La definición de tablas está en `db/schema.ts`. Netlify aplica las migraciones
 2. Registra nuevas compras desde **Boleta**.
 3. Al comenzar el día, pega el conteo físico desde **Conteo** usando una línea por producto.
 4. Revisa las alertas y prioriza la salida de los lotes indicados en **Próximos vencimientos**.
+
