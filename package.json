@@ -10,10 +10,11 @@
   "dependencies": {
     "@neondatabase/serverless": "^0.10.4",
     "@tailwindcss/vite": "4.2.2",
-    "@tanstack/react-router": "1.168.22",
-    "@tanstack/react-start": "1.167.41",
+    "@tanstack/react-router": "^1.168.22",
+    "@tanstack/react-start": "^1.167.41",
+    "@tanstack/start": "^1.167.41",
     "@tanstack/react-store": "0.10.0",
-    "@tanstack/router-plugin": "1.167.22",
+    "@tanstack/router-plugin": "^1.167.22",
     "@tanstack/store": "0.10.0",
     "drizzle-orm": "^0.38.0",
     "lucide-react": "0.576.0",
@@ -38,4 +39,3 @@
     "vite": "7.3.3"
   }
 }
-
