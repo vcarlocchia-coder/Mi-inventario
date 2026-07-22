@@ -1,5 +1,6 @@
-import { createServerFn } from '@tanstack/react-start'
 import { and, asc, desc, eq, inArray } from 'drizzle-orm'
+import { drizzle } from 'drizzle-orm/neon-http'
+import { neon } from '@neondatabase/serverless'
 import { z } from 'zod'
 import {
   dailySnapshotItems,
@@ -8,6 +9,10 @@ import {
   inventoryItems,
   units,
 } from './schema'
+
+// Inicialización de conexión a Neon Database
+const sql = neon(process.env.DATABASE_URL || '')
+const db = drizzle(sql)
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 const positiveInteger = z.number().int().positive()
@@ -19,7 +24,7 @@ const initialStockSchema = z
     name: z.string().trim().min(1).max(160),
     unit: z.string().trim().min(1).max(30),
     minimumStock: nonNegativeInteger,
-    averageDailySales: z.number().nonnegative(), // <-- PEAJE: Aceptamos la venta promedio
+    averageDailySales: z.number().nonnegative(),
     quantity: positiveInteger,
     expirationDate: isoDate,
     receivedDate: isoDate,
@@ -55,7 +60,7 @@ const snapshotSchema = z.object({
     .min(1),
 })
 
-type LotRow = typeof stockLots.$inferSelect
+type ItemRow = typeof inventoryItems.$inferSelect
 
 function startOfTodayUtc() {
   return new Date().toISOString().slice(0, 10)
@@ -66,40 +71,39 @@ function daysUntil(date: string, today: string) {
   return Math.ceil(milliseconds / 86_400_000)
 }
 
-function allocateRemainingLots(lots: LotRow[], countedQuantity: number | null, snapshotDate: string | null) {
-  const sortedLots = [...lots].sort((a, b) => {
-    const expirationOrder = a.expirationDate.localeCompare(b.expirationDate)
-    return expirationOrder || a.receivedDate.localeCompare(b.receivedDate) || a.id - b.id
+function allocateRemainingLots(items: ItemRow[], countedQuantity: number | null, snapshotDate: string | null) {
+  const sortedItems = [...items].sort((a, b) => {
+    const expirationOrder = (a.expirationDate || '').localeCompare(b.expirationDate || '')
+    return expirationOrder || (a.createdAt ? a.createdAt.toISOString().localeCompare(b.createdAt ? b.createdAt.toISOString() : '') : 0) || a.id - b.id
   })
 
   if (countedQuantity === null || snapshotDate === null) {
-    return sortedLots.map((lot) => ({ ...lot, remainingQuantity: lot.quantity }))
+    return sortedItems.map((item) => ({ ...item, remainingQuantity: item.quantity }))
   }
 
-  const lotsBeforeSnapshot = sortedLots.filter((lot) => lot.receivedDate < snapshotDate)
-  const laterLots = sortedLots.filter((lot) => lot.receivedDate >= snapshotDate)
-  const stockBeforeSnapshot = lotsBeforeSnapshot.reduce((total, lot) => total + lot.quantity, 0)
+  const itemsBeforeSnapshot = sortedItems.filter((item) => item.createdAt && item.createdAt.toISOString() < snapshotDate)
+  const laterItems = sortedItems.filter((item) => item.createdAt && item.createdAt.toISOString() >= snapshotDate)
+  const stockBeforeSnapshot = itemsBeforeSnapshot.reduce((total, item) => total + item.quantity, 0)
   let consumedQuantity = Math.max(0, stockBeforeSnapshot - countedQuantity)
 
-  const adjustedOlderLots = lotsBeforeSnapshot.map((lot) => {
-    const consumedFromLot = Math.min(consumedQuantity, lot.quantity)
+  const adjustedOlderItems = itemsBeforeSnapshot.map((item) => {
+    const consumedFromLot = Math.min(consumedQuantity, item.quantity)
     consumedQuantity -= consumedFromLot
-    return { ...lot, remainingQuantity: lot.quantity - consumedFromLot }
+    return { ...item, remainingQuantity: item.quantity - consumedFromLot }
   })
 
   return [
-    ...adjustedOlderLots,
-    ...laterLots.map((lot) => ({ ...lot, remainingQuantity: lot.quantity })),
+    ...adjustedOlderItems,
+    ...laterItems.map((item) => ({ ...item, remainingQuantity: item.quantity })),
   ]
 }
 
-export const getInventoryDashboard = createServerFn({ method: 'GET' }).handler(async () => {
-  const [productRows, lotRows, snapshotItemRows, snapshotRows] = await Promise.all([
-    db.select().from(products).orderBy(asc(products.name)),
-    db.select().from(stockLots).orderBy(asc(stockLots.expirationDate)),
+export async function getInventoryDashboard() {
+  const [itemRows, snapshotItemRows, snapshotRows] = await Promise.all([
+    db.select().from(inventoryItems).orderBy(asc(inventoryItems.name)),
     db
       .select({
-        productId: dailySnapshotItems.productId,
+        productId: dailySnapshotItems.inventoryItemId,
         countedQuantity: dailySnapshotItems.countedQuantity,
         snapshotDate: dailySnapshots.snapshotDate,
       })
@@ -117,43 +121,36 @@ export const getInventoryDashboard = createServerFn({ method: 'GET' }).handler(a
     }
   }
 
-  const inventory = productRows.map((product) => {
-    const productLots = lotRows.filter((lot) => lot.productId === product.id)
+  const inventory = itemRows.map((product) => {
+    const productLots = itemRows.filter((item) => item.id === product.id)
     const snapshot = latestSnapshotByProduct.get(product.id) ?? null
     const adjustedLots = allocateRemainingLots(
       productLots,
       snapshot?.countedQuantity ?? null,
       snapshot?.snapshotDate ?? null,
     )
-    
+
     const currentStock = adjustedLots.reduce((total, lot) => total + lot.remainingQuantity, 0)
-    
-    // LA BOLA DE CRISTAL: Calculamos si se va a vencer antes de venderse
-    let accumulatedStockForPrediction = 0;
+    let accumulatedStockForPrediction = 0
 
     const activeLots = adjustedLots
       .filter((lot) => lot.remainingQuantity > 0)
       .map((lot) => {
-        accumulatedStockForPrediction += lot.remainingQuantity;
-        const daysToExpire = daysUntil(lot.expirationDate, today);
+        accumulatedStockForPrediction += lot.remainingQuantity
+        const daysToExpire = lot.expirationDate ? daysUntil(lot.expirationDate, today) : 999
         
-        // Si tenemos un promedio de ventas, calculamos cuántos días nos tomaría agotar este lote
-        const daysToSell = product.averageDailySales > 0 
-          ? accumulatedStockForPrediction / product.averageDailySales 
-          : Infinity;
-        
-        // Si los días para venderlo son más que los días para que venza, encendemos la alarma
-        const willExpireBeforeSale = product.averageDailySales > 0 && daysToExpire >= 0 && daysToSell > daysToExpire;
+        const avgSales = 1 // Promedio por defecto
+        const daysToSell = avgSales > 0 ? accumulatedStockForPrediction / avgSales : Infinity
+        const willExpireBeforeSale = avgSales > 0 && daysToExpire >= 0 && daysToSell > daysToExpire
 
         return {
           id: lot.id,
-          sourceType: lot.sourceType,
-          sourceReference: lot.sourceReference,
-          receivedDate: lot.receivedDate,
+          sku: lot.sku,
+          name: lot.name,
           expirationDate: lot.expirationDate,
           remainingQuantity: lot.remainingQuantity,
           daysToExpire,
-          willExpireBeforeSale, // <-- ALARMA SILENCIOSA
+          willExpireBeforeSale,
         }
       })
 
@@ -176,7 +173,6 @@ export const getInventoryDashboard = createServerFn({ method: 'GET' }).handler(a
     .filter((lot) => lot.daysToExpire < 0)
     .reduce((total, lot) => total + lot.remainingQuantity, 0)
 
-  // Unidades con riesgo de vencerse antes de su venta
   const riskUnits = allActiveLots
     .filter((lot) => lot.willExpireBeforeSale)
     .reduce((total, lot) => total + lot.remainingQuantity, 0)
@@ -187,138 +183,117 @@ export const getInventoryDashboard = createServerFn({ method: 'GET' }).handler(a
     summary: {
       totalProducts: inventory.length,
       totalUnits,
-      lowStockProducts: inventory.filter((product) => product.currentStock <= product.minimumStock).length,
+      lowStockProducts: inventory.filter((product) => product.currentStock <= (product.minimumStock || 0)).length,
       expiringSoonUnits,
       expiredUnits,
-      riskUnits, // <-- Sumamos este dato al resumen general
+      riskUnits,
     },
   }
-})
+}
 
-export const createInitialStock = createServerFn({ method: 'POST' })
-  .inputValidator(initialStockSchema)
-  .handler(async ({ data }) => {
-    const normalizedSku = data.sku.toUpperCase()
-    const existing = await db.select().from(products).where(eq(products.sku, normalizedSku)).limit(1)
-    if (existing.length > 0) {
-      throw new Error('El SKU ya existe. Usa “Cargar boleta” para sumar mercadería.')
+export async function createInitialStock(input: z.infer<typeof initialStockSchema>) {
+  const data = initialStockSchema.parse(input)
+  const normalizedSku = data.sku.toUpperCase()
+  const existing = await db.select().from(inventoryItems).where(eq(inventoryItems.sku, normalizedSku)).limit(1)
+  if (existing.length > 0) {
+    throw new Error('El SKU ya existe. Usa “Cargar boleta” para sumar mercadería.')
+  }
+
+  const [product] = await db
+    .insert(inventoryItems)
+    .values({
+      sku: normalizedSku,
+      name: data.name,
+      quantity: data.quantity,
+      minimumStock: data.minimumStock,
+      expirationDate: data.expirationDate,
+    })
+    .returning()
+
+  return product
+}
+
+export async function addReceipt(input: z.infer<typeof receiptSchema>) {
+  const data = receiptSchema.parse(input)
+  const product = await db.select().from(inventoryItems).where(eq(inventoryItems.id, data.productId)).limit(1)
+  if (product.length === 0) throw new Error('El producto seleccionado no existe.')
+
+  const [updated] = await db
+    .update(inventoryItems)
+    .set({
+      quantity: product[0].quantity + data.quantity,
+      expirationDate: data.expirationDate,
+    })
+    .where(eq(inventoryItems.id, data.productId))
+    .returning()
+
+  return updated
+}
+
+export async function saveDailySnapshot(input: z.infer<typeof snapshotSchema>) {
+  const data = snapshotSchema.parse(input)
+  const normalizedItems = data.items.map((item) => ({ ...item, sku: item.sku.toUpperCase() }))
+  const repeatedSkus = normalizedItems.filter(
+    (item, index) => normalizedItems.findIndex((candidate) => candidate.sku === item.sku) !== index,
+  )
+  if (repeatedSkus.length > 0) throw new Error(`Hay SKU repetidos: ${repeatedSkus[0].sku}`)
+
+  const productRows = await db
+    .select({ id: inventoryItems.id, sku: inventoryItems.sku })
+    .from(inventoryItems)
+    .where(inArray(inventoryItems.sku, normalizedItems.map((item) => item.sku)))
+  const productBySku = new Map(productRows.map((product) => [product.sku, product]))
+  
+  const validItems = normalizedItems.filter((item) => productBySku.has(item.sku))
+  if (validItems.length === 0) throw new Error(`Ninguno de los SKUs pegados coincide con la base inicial.`)
+
+  const existingSnapshot = await db
+    .select()
+    .from(dailySnapshots)
+    .where(eq(dailySnapshots.snapshotDate, data.snapshotDate))
+    .limit(1)
+
+  const snapshot = existingSnapshot[0]
+    ? (
+        await db
+          .update(dailySnapshots)
+          .set({ notes: data.notes })
+          .where(eq(dailySnapshots.id, existingSnapshot[0].id))
+          .returning()
+      )[0]
+    : (
+        await db
+          .insert(dailySnapshots)
+          .values({ snapshotDate: data.snapshotDate, notes: data.notes })
+          .returning()
+      )[0]
+
+  for (const item of validItems) {
+    const product = productBySku.get(item.sku)!
+    const existingItem = await db
+      .select({ id: dailySnapshotItems.id })
+      .from(dailySnapshotItems)
+      .where(
+        and(
+          eq(dailySnapshotItems.snapshotId, snapshot.id),
+          eq(dailySnapshotItems.inventoryItemId, product.id),
+        ),
+      )
+      .limit(1)
+
+    if (existingItem[0]) {
+      await db
+        .update(dailySnapshotItems)
+        .set({ countedQuantity: item.quantity })
+        .where(eq(dailySnapshotItems.id, existingItem[0].id))
+    } else {
+      await db.insert(dailySnapshotItems).values({
+        snapshotId: snapshot.id,
+        inventoryItemId: product.id,
+        countedQuantity: item.quantity,
+      })
     }
+  }
 
-    return db.transaction(async (tx) => {
-      const [product] = await tx
-        .insert(products)
-        .values({
-          sku: normalizedSku,
-          name: data.name,
-          unit: data.unit,
-          minimumStock: data.minimumStock,
-          averageDailySales: data.averageDailySales, // <-- GUARDADO: Lo mandamos a la base de datos
-        })
-        .returning()
-
-      await tx.insert(stockLots).values({
-        productId: product.id,
-        sourceType: 'initial',
-        sourceReference: 'Stock inicial',
-        quantity: data.quantity,
-        expirationDate: data.expirationDate,
-        receivedDate: data.receivedDate,
-      })
-
-      return product
-    })
-  })
-
-export const addReceipt = createServerFn({ method: 'POST' })
-  .inputValidator(receiptSchema)
-  .handler(async ({ data }) => {
-    const product = await db.select().from(products).where(eq(products.id, data.productId)).limit(1)
-    if (product.length === 0) throw new Error('El producto seleccionado no existe.')
-
-    const [lot] = await db
-      .insert(stockLots)
-      .values({
-        productId: data.productId,
-        sourceType: 'receipt',
-        sourceReference: data.reference,
-        quantity: data.quantity,
-        expirationDate: data.expirationDate,
-        receivedDate: data.receivedDate,
-      })
-      .returning()
-
-    return lot
-  })
-
-export const saveDailySnapshot = createServerFn({ method: 'POST' })
-  .inputValidator(snapshotSchema)
-  .handler(async ({ data }) => {
-    const normalizedItems = data.items.map((item) => ({ ...item, sku: item.sku.toUpperCase() }))
-    const repeatedSkus = normalizedItems.filter(
-      (item, index) => normalizedItems.findIndex((candidate) => candidate.sku === item.sku) !== index,
-    )
-    if (repeatedSkus.length > 0) throw new Error(`Hay SKU repetidos: ${repeatedSkus[0].sku}`)
-
-    const productRows = await db
-      .select({ id: products.id, sku: products.sku })
-      .from(products)
-      .where(inArray(products.sku, normalizedItems.map((item) => item.sku)))
-    const productBySku = new Map(productRows.map((product) => [product.sku, product]))
-    
-    // Si pegamos miles de cosas, acá filtramos para que solo pasen los SKUs que tenemos en la base
-    const validItems = normalizedItems.filter(item => productBySku.has(item.sku))
-
-    if (validItems.length === 0) throw new Error(`Ninguno de los SKUs pegados coincide con la base inicial.`)
-
-    return db.transaction(async (tx) => {
-      const existingSnapshot = await tx
-        .select()
-        .from(dailySnapshots)
-        .where(eq(dailySnapshots.snapshotDate, data.snapshotDate))
-        .limit(1)
-
-      const snapshot = existingSnapshot[0]
-        ? (
-            await tx
-              .update(dailySnapshots)
-              .set({ notes: data.notes })
-              .where(eq(dailySnapshots.id, existingSnapshot[0].id))
-              .returning()
-          )[0]
-        : (
-            await tx
-              .insert(dailySnapshots)
-              .values({ snapshotDate: data.snapshotDate, notes: data.notes })
-              .returning()
-          )[0]
-
-      for (const item of validItems) {
-        const product = productBySku.get(item.sku)!
-        const existingItem = await tx
-          .select({ id: dailySnapshotItems.id })
-          .from(dailySnapshotItems)
-          .where(
-            and(
-              eq(dailySnapshotItems.snapshotId, snapshot.id),
-              eq(dailySnapshotItems.productId, product.id),
-            ),
-          )
-          .limit(1)
-
-        if (existingItem[0]) {
-          await tx
-            .update(dailySnapshotItems)
-            .set({ countedQuantity: item.quantity })
-            .where(eq(dailySnapshotItems.id, existingItem[0].id))
-        } else {
-          await tx.insert(dailySnapshotItems).values({
-            snapshotId: snapshot.id,
-            productId: product.id,
-            countedQuantity: item.quantity,
-          })
-        }
-      }
-
-      return snapshot
-    })
-  })
+  return snapshot
+}
