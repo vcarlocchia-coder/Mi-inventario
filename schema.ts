@@ -3,6 +3,7 @@ import {
   index,
   integer,
   pgTable,
+  real, // <-- AGREGAMOS ESTO PARA PERMITIR DECIMALES
   serial,
   text,
   timestamp,
@@ -17,6 +18,7 @@ export const products = pgTable(
     name: text().notNull(),
     unit: text().notNull().default('unidades'),
     minimumStock: integer('minimum_stock').notNull().default(0),
+    averageDailySales: real('average_daily_sales').notNull().default(0), // <-- NUESTRO NUEVO CAMPO
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [uniqueIndex('products_sku_unique').on(table.sku)],
