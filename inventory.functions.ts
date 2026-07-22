@@ -1,7 +1,7 @@
 import { createServerFn } from '@tanstack/react-start'
 import { and, asc, desc, eq, inArray } from 'drizzle-orm'
 import { z } from 'zod'
-import { db } from '../../db/index.js'
+import ... from "./schema"
 import {
   dailySnapshotItems,
   dailySnapshots,
