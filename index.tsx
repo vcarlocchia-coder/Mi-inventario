@@ -239,22 +239,39 @@ function SnapshotForm({ data, disabled, onSubmit }: { data: DashboardData; disab
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
-    const items = rawStock.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+    
+    // 1. Extraemos todo lo que pegaste (la lista gigante)
+    const allItems = rawStock.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
       const [sku, quantity] = line.split(/[;,\t ]+/)
       return { sku: sku?.trim() ?? '', quantity: Number(quantity) }
     })
+
+    // 2. FILTRO ESTRICTO: Solo nos quedamos con los que coinciden con tu base inicial
+    const knownSkus = data.inventory.map(p => p.sku.toLowerCase())
+    const items = allItems.filter(item => knownSkus.includes(item.sku.toLowerCase()))
+
     if (items.some((item) => !item.sku || !Number.isInteger(item.quantity) || item.quantity < 0)) {
-      window.alert('Usa una línea por producto con formato SKU;CANTIDAD.')
+      window.alert('Revisa los datos: Asegurate de usar el formato SKU;CANTIDAD.')
       return
     }
+
+    // 3. Avisamos si de toda la lista no rescató ni un solo SKU válido
+    if (items.length === 0) {
+      window.alert('Atención: Ninguno de los SKUs que pegaste coincide con los de tu base inicial.')
+      return
+    }
+
     await onSubmit({ snapshotDate: String(form.get('snapshotDate')), notes: String(form.get('notes')), items })
   }
 
   return (
     <form className="action-form" onSubmit={(event) => void handleSubmit(event)}>
-      <div className="form-intro"><span className="form-number">01</span><div><h2>Pegar stock de apertura</h2><p>Copia dos columnas desde Excel: SKU y cantidad contada.</p></div></div>
+      <div className="form-intro">
+        <span className="form-number">01</span>
+        <div><h2>Pegar stock de apertura</h2><p>Pegá tu lista completa. El sistema solo filtrará y descontará los SKUs cargados en tu base.</p></div>
+      </div>
       <label className="field"><span>Fecha del conteo</span><input type="date" name="snapshotDate" defaultValue={todayIso()} required /></label>
-      <label className="field"><span>Base diaria <small>SKU;CANTIDAD</small></span><textarea value={rawStock} onChange={(event) => setRawStock(event.target.value)} placeholder={'HAR-001;24\nLEC-200;12\nQUE-055;8'} rows={10} required /></label>
+      <label className="field"><span>Base diaria <small>SKU;CANTIDAD</small></span><textarea value={rawStock} onChange={(event) => setRawStock(event.target.value)} placeholder={'HAR-001;24\nLEC-200;12'} rows={10} required /></label>
       <button className="mini-action" type="button" onClick={() => setRawStock(suggestedRows)}><RotateCcw size={14} /> Usar stock calculado como base</button>
       <label className="field"><span>Observación <small>opcional</small></span><input name="notes" placeholder="Ej. Conteo turno mañana" maxLength={300} /></label>
       <button className="submit-button" disabled={disabled || data.inventory.length === 0}><ArrowDownToLine size={18} /> {disabled ? 'Guardando…' : 'Actualizar inventario'}</button>
@@ -265,17 +282,57 @@ function SnapshotForm({ data, disabled, onSubmit }: { data: DashboardData; disab
 }
 
 function ReceiptForm({ data, disabled, onSubmit }: { data: DashboardData; disabled: boolean; onSubmit: (payload: ReceiptPayload) => Promise<void> }) {
+  const [skuInput, setSkuInput] = useState('')
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    
+    // VERIFICACIÓN: Buscamos si el SKU escrito existe realmente en la base
+    const product = data.inventory.find(p => p.sku.toLowerCase() === skuInput.trim().toLowerCase())
+    
+    if (!product) {
+      window.alert(`⚠️ El SKU "${skuInput}" no existe en tu base inicial.\n\nPor favor, verificá que esté bien escrito o andá a la pestaña "Inicial" para dar de alta el producto primero.`)
+      return
+    }
+
     const formElement = event.currentTarget
     const form = new FormData(formElement)
-    await onSubmit({ productId: Number(form.get('productId')), reference: String(form.get('reference')), quantity: Number(form.get('quantity')), expirationDate: String(form.get('expirationDate')), receivedDate: String(form.get('receivedDate')) })
+    await onSubmit({ 
+      productId: product.id, 
+      reference: String(form.get('reference')), 
+      quantity: Number(form.get('quantity')), 
+      expirationDate: String(form.get('expirationDate')), 
+      receivedDate: String(form.get('receivedDate')) 
+    })
     formElement.reset()
+    setSkuInput('')
   }
+
   return (
     <form className="action-form" onSubmit={(event) => void handleSubmit(event)}>
-      <div className="form-intro"><span className="form-number">02</span><div><h2>Cargar una boleta</h2><p>Suma un lote nuevo con trazabilidad completa.</p></div></div>
-      <label className="field"><span>Producto</span><select name="productId" required defaultValue=""><option value="" disabled>Seleccionar producto</option>{data.inventory.map((product) => <option value={product.id} key={product.id}>{product.sku} · {product.name}</option>)}</select></label>
+      <div className="form-intro">
+        <span className="form-number">02</span>
+        <div><h2>Cargar una boleta</h2><p>Suma un lote nuevo. Si ingresas un SKU desconocido, se bloqueará la carga.</p></div>
+      </div>
+      
+      <label className="field">
+        <span>SKU del Producto</span>
+        {/* Le agregamos un datalist para que te sugiera SKUs a medida que escribís */}
+        <input 
+          name="skuField" 
+          value={skuInput} 
+          onChange={(e) => setSkuInput(e.target.value)} 
+          placeholder="Escribí o pegá el SKU (Ej: HAR-001)" 
+          list="skus-disponibles"
+          required 
+        />
+        <datalist id="skus-disponibles">
+          {data.inventory.map((product) => (
+            <option value={product.sku} key={product.id}>{product.name}</option>
+          ))}
+        </datalist>
+      </label>
+
       <label className="field"><span>Nº de boleta o referencia</span><input name="reference" placeholder="Ej. BOL-10482" required maxLength={100} /></label>
       <div className="field-pair"><label className="field"><span>Cantidad</span><input type="number" name="quantity" min="1" step="1" placeholder="0" required /></label><label className="field"><span>Fecha de ingreso</span><input type="date" name="receivedDate" defaultValue={todayIso()} required /></label></div>
       <label className="field"><span>Fecha de vencimiento</span><input type="date" name="expirationDate" required /></label>
