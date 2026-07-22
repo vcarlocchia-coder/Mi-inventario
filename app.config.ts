@@ -1,4 +1,4 @@
-import { defineConfig } from '@tanstack/react-start'
+import { defineConfig } from '@tanstack/start/config'
 
 export default defineConfig({
   server: {
