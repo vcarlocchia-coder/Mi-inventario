@@ -5,9 +5,8 @@ import { z } from 'zod'
 import {
   dailySnapshotItems,
   dailySnapshots,
-  inventoryAuditLogs,
-  inventoryItems,
-  units,
+  products,
+  stockLots,
 } from './schema'
 
 // Inicialización de conexión a Neon Database
