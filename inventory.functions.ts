@@ -19,6 +19,7 @@ const initialStockSchema = z
     name: z.string().trim().min(1).max(160),
     unit: z.string().trim().min(1).max(30),
     minimumStock: nonNegativeInteger,
+    averageDailySales: z.number().nonnegative(), // <-- PEAJE: Aceptamos la venta promedio
     quantity: positiveInteger,
     expirationDate: isoDate,
     receivedDate: isoDate,
@@ -124,18 +125,37 @@ export const getInventoryDashboard = createServerFn({ method: 'GET' }).handler(a
       snapshot?.countedQuantity ?? null,
       snapshot?.snapshotDate ?? null,
     )
+    
     const currentStock = adjustedLots.reduce((total, lot) => total + lot.remainingQuantity, 0)
+    
+    // LA BOLA DE CRISTAL: Calculamos si se va a vencer antes de venderse
+    let accumulatedStockForPrediction = 0;
+
     const activeLots = adjustedLots
       .filter((lot) => lot.remainingQuantity > 0)
-      .map((lot) => ({
-        id: lot.id,
-        sourceType: lot.sourceType,
-        sourceReference: lot.sourceReference,
-        receivedDate: lot.receivedDate,
-        expirationDate: lot.expirationDate,
-        remainingQuantity: lot.remainingQuantity,
-        daysToExpire: daysUntil(lot.expirationDate, today),
-      }))
+      .map((lot) => {
+        accumulatedStockForPrediction += lot.remainingQuantity;
+        const daysToExpire = daysUntil(lot.expirationDate, today);
+        
+        // Si tenemos un promedio de ventas, calculamos cuántos días nos tomaría agotar este lote
+        const daysToSell = product.averageDailySales > 0 
+          ? accumulatedStockForPrediction / product.averageDailySales 
+          : Infinity;
+        
+        // Si los días para venderlo son más que los días para que venza, encendemos la alarma
+        const willExpireBeforeSale = product.averageDailySales > 0 && daysToExpire >= 0 && daysToSell > daysToExpire;
+
+        return {
+          id: lot.id,
+          sourceType: lot.sourceType,
+          sourceReference: lot.sourceReference,
+          receivedDate: lot.receivedDate,
+          expirationDate: lot.expirationDate,
+          remainingQuantity: lot.remainingQuantity,
+          daysToExpire,
+          willExpireBeforeSale, // <-- ALARMA SILENCIOSA
+        }
+      })
 
     return {
       ...product,
@@ -156,6 +176,11 @@ export const getInventoryDashboard = createServerFn({ method: 'GET' }).handler(a
     .filter((lot) => lot.daysToExpire < 0)
     .reduce((total, lot) => total + lot.remainingQuantity, 0)
 
+  // Unidades con riesgo de vencerse antes de su venta
+  const riskUnits = allActiveLots
+    .filter((lot) => lot.willExpireBeforeSale)
+    .reduce((total, lot) => total + lot.remainingQuantity, 0)
+
   return {
     inventory,
     recentSnapshots: snapshotRows,
@@ -165,6 +190,7 @@ export const getInventoryDashboard = createServerFn({ method: 'GET' }).handler(a
       lowStockProducts: inventory.filter((product) => product.currentStock <= product.minimumStock).length,
       expiringSoonUnits,
       expiredUnits,
+      riskUnits, // <-- Sumamos este dato al resumen general
     },
   }
 })
@@ -186,6 +212,7 @@ export const createInitialStock = createServerFn({ method: 'POST' })
           name: data.name,
           unit: data.unit,
           minimumStock: data.minimumStock,
+          averageDailySales: data.averageDailySales, // <-- GUARDADO: Lo mandamos a la base de datos
         })
         .returning()
 
@@ -237,8 +264,11 @@ export const saveDailySnapshot = createServerFn({ method: 'POST' })
       .from(products)
       .where(inArray(products.sku, normalizedItems.map((item) => item.sku)))
     const productBySku = new Map(productRows.map((product) => [product.sku, product]))
-    const missingSku = normalizedItems.find((item) => !productBySku.has(item.sku))
-    if (missingSku) throw new Error(`No existe el SKU ${missingSku.sku}. Cárgalo primero como stock inicial.`)
+    
+    // Si pegamos miles de cosas, acá filtramos para que solo pasen los SKUs que tenemos en la base
+    const validItems = normalizedItems.filter(item => productBySku.has(item.sku))
+
+    if (validItems.length === 0) throw new Error(`Ninguno de los SKUs pegados coincide con la base inicial.`)
 
     return db.transaction(async (tx) => {
       const existingSnapshot = await tx
@@ -262,7 +292,7 @@ export const saveDailySnapshot = createServerFn({ method: 'POST' })
               .returning()
           )[0]
 
-      for (const item of normalizedItems) {
+      for (const item of validItems) {
         const product = productBySku.get(item.sku)!
         const existingItem = await tx
           .select({ id: dailySnapshotItems.id })

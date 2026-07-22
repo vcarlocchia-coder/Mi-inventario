@@ -34,7 +34,7 @@ type ActionMode = 'initial' | 'receipt' | 'snapshot'
 type DashboardData = Awaited<ReturnType<typeof getInventoryDashboard>>
 type SnapshotPayload = { snapshotDate: string; notes: string; items: Array<{ sku: string; quantity: number }> }
 type ReceiptPayload = { productId: number; reference: string; quantity: number; expirationDate: string; receivedDate: string }
-type InitialPayload = { sku: string; name: string; unit: string; minimumStock: number; quantity: number; expirationDate: string; receivedDate: string }
+type InitialPayload = { sku: string; name: string; unit: string; minimumStock: number; averageDailySales: number; quantity: number; expirationDate: string; receivedDate: string }
 
 const dateFormatter = new Intl.DateTimeFormat('es-CL', {
   day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC',
@@ -347,7 +347,16 @@ function InitialStockForm({ disabled, onSubmit }: { disabled: boolean; onSubmit:
     event.preventDefault()
     const formElement = event.currentTarget
     const form = new FormData(formElement)
-    await onSubmit({ sku: String(form.get('sku')), name: String(form.get('name')), unit: String(form.get('unit')), minimumStock: Number(form.get('minimumStock')), quantity: Number(form.get('quantity')), expirationDate: String(form.get('expirationDate')), receivedDate: String(form.get('receivedDate')) })
+    await onSubmit({ 
+      sku: String(form.get('sku')), 
+      name: String(form.get('name')), 
+      unit: String(form.get('unit')), 
+      minimumStock: Number(form.get('minimumStock')), 
+      averageDailySales: Number(form.get('averageDailySales')), // <-- El nuevo dato
+      quantity: Number(form.get('quantity')), 
+      expirationDate: String(form.get('expirationDate')), 
+      receivedDate: String(form.get('receivedDate')) 
+    })
     formElement.reset()
   }
   return (
@@ -355,8 +364,18 @@ function InitialStockForm({ disabled, onSubmit }: { disabled: boolean; onSubmit:
       <div className="form-intro"><span className="form-number">00</span><div><h2>Crear stock inicial</h2><p>Da de alta un producto y su primer lote.</p></div></div>
       <div className="field-pair"><label className="field"><span>SKU</span><input name="sku" placeholder="HAR-001" required maxLength={60} /></label><label className="field"><span>Unidad</span><input name="unit" defaultValue="unidades" required maxLength={30} /></label></div>
       <label className="field"><span>Nombre del producto</span><input name="name" placeholder="Harina sin polvos 1 kg" required maxLength={160} /></label>
-      <div className="field-pair"><label className="field"><span>Cantidad inicial</span><input type="number" name="quantity" min="1" step="1" required /></label><label className="field"><span>Stock mínimo</span><input type="number" name="minimumStock" min="0" step="1" defaultValue="0" required /></label></div>
-      <div className="field-pair"><label className="field"><span>Fecha base</span><input type="date" name="receivedDate" defaultValue={todayIso()} required /></label><label className="field"><span>Vencimiento</span><input type="date" name="expirationDate" required /></label></div>
+      
+      <div className="field-pair">
+        <label className="field"><span>Cantidad inicial</span><input type="number" name="quantity" min="1" step="1" required /></label>
+        <label className="field"><span>Stock mínimo</span><input type="number" name="minimumStock" min="0" step="1" defaultValue="0" required /></label>
+      </div>
+      
+      <div className="field-pair">
+        <label className="field"><span>Venta Prom. Diaria</span><input type="number" name="averageDailySales" min="0" step="0.1" defaultValue="0" required /></label>
+        <label className="field"><span>Fecha base</span><input type="date" name="receivedDate" defaultValue={todayIso()} required /></label>
+      </div>
+      
+      <label className="field"><span>Vencimiento</span><input type="date" name="expirationDate" required /></label>
       <button className="submit-button" disabled={disabled}><FilePlus2 size={18} /> {disabled ? 'Creando…' : 'Crear producto y lote'}</button>
     </form>
   )
