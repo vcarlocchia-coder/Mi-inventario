@@ -3,9 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite dev --port 3000",
-    "build": "vite build"
-  },
+  "dev": "vinxi dev",
+  "build": "vinxi build",
+  "start": "vinxi start"
+},
   "dependencies": {
     "@neondatabase/serverless": "^0.10.4",
     "@tailwindcss/vite": "4.2.2",
