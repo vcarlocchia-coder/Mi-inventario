@@ -3,10 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-  "dev": "vinxi dev",
-  "build": "vinxi build",
-  "start": "vinxi start"
-},
+    "dev": "vinxi dev",
+    "build": "vinxi build",
+    "start": "vinxi start"
+  },
   "dependencies": {
     "@neondatabase/serverless": "^0.10.4",
     "@tailwindcss/vite": "4.2.2",
@@ -20,6 +20,7 @@
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "tailwindcss": "4.2.2",
+    "vinxi": "^0.4.3",
     "vite-tsconfig-paths": "6.1.1",
     "zod": "^4.4.3"
   },
