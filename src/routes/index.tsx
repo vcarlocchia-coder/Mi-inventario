@@ -48,7 +48,7 @@ import {
 
   saveDailySnapshot,
 
-} from '../server/inventory.functions'
+} from '../../inventory.functions'
 
 
 
