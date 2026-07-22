@@ -1,13 +1,13 @@
 import { createServerFn } from '@tanstack/react-start'
 import { and, asc, desc, eq, inArray } from 'drizzle-orm'
 import { z } from 'zod'
-import ... from "./schema"
 import {
   dailySnapshotItems,
   dailySnapshots,
-  products,
-  stockLots,
-} from '../../db/schema.js'
+  inventoryAuditLogs,
+  inventoryItems,
+  units,
+} from './schema'
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 const positiveInteger = z.number().int().positive()
