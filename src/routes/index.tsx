@@ -78,7 +78,6 @@ function InventoryDashboard() {
     }
   }
 
-  // Rescatamos los datos crudos directo de la memoria para forzar la lectura de la fecha
   const rawProducts = useMemo(() => {
     try { return JSON.parse(localStorage.getItem('stock_products') || '[]') } catch { return [] }
   }, [data])
@@ -94,6 +93,48 @@ function InventoryDashboard() {
       return !query || product.name.toLowerCase().includes(query) || String(product.sku).toLowerCase().includes(query)
     })
   }, [data, search])
+
+  // CÁLCULO DINÁMICO PARA LOS MÓDULOS DE ARRIBA
+  const dashboardStats = useMemo(() => {
+    let totalUnits = 0;
+    let expiringSoon = 0;
+    let expired = 0;
+    let risk = 0;
+
+    const today = new Date(todayIso());
+    const thirtyDays = new Date(today);
+    thirtyDays.setDate(today.getDate() + 30);
+
+    data.inventory?.forEach((product: any) => {
+      const currentStock = product.currentStock || 0;
+      totalUnits += currentStock;
+
+      const prodRaw = rawProducts.find((p: any) => p.sku === product.sku);
+      const lotRaw = rawLots.find((l: any) => l.productId === product.id || l.sku === product.sku);
+      
+      const expDateStr = product.expirationDate || lotRaw?.expirationDate || prodRaw?.expirationDate;
+      const avgSales = product.averageDailySales || prodRaw?.averageDailySales || 0;
+
+      if (expDateStr) {
+        const expDate = new Date(`${expDateStr}T00:00:00Z`);
+        if (expDate < today) {
+          expired += currentStock;
+        } else if (expDate <= thirtyDays) {
+          expiringSoon += currentStock;
+        }
+
+        if (avgSales > 0 && expDate >= today) {
+          const daysToSell = currentStock / avgSales;
+          const daysToExpire = (expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24);
+          if (daysToSell > daysToExpire) {
+            risk += currentStock;
+          }
+        }
+      }
+    });
+
+    return { totalUnits, expiringSoon, expired, risk, totalProducts: data.inventory?.length || 0 };
+  }, [data, rawProducts, rawLots]);
 
   async function runMutation(task: () => Promise<unknown>, successText: string) {
     setMessage(null)
@@ -132,10 +173,10 @@ function InventoryDashboard() {
         </section>
 
         <section className="stats-grid">
-          <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(data?.summary?.totalUnits || 0)} detail={`${data?.summary?.totalProducts || 0} productos activos`} tone="ink" />
-          <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(data?.summary?.expiringSoonUnits || 0)} detail="unidades para priorizar" tone="amber" />
-          <StatCard icon={<AlertTriangle />} label="Riesgo de merma" value={numberFormatter.format(data?.summary?.riskUnits || 0)} detail="vencerán antes de venderse" tone="rose" />
-          <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(data?.summary?.expiredUnits || 0)} detail="unidades vencidas" tone="green" />
+          <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(dashboardStats.totalUnits)} detail={`${dashboardStats.totalProducts} productos activos`} tone="ink" />
+          <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(dashboardStats.expiringSoon)} detail="unidades para priorizar" tone="amber" />
+          <StatCard icon={<AlertTriangle />} label="Riesgo de merma" value={numberFormatter.format(dashboardStats.risk)} detail="vencerán antes de venderse" tone="rose" />
+          <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(dashboardStats.expired)} detail="unidades vencidas" tone="green" />
         </section>
 
         <div className="workspace">
@@ -159,7 +200,6 @@ function InventoryDashboard() {
               ) : filteredInventory.length > 0 ? (
                 <div className="inventory-list">
                   {filteredInventory.map((product: any) => {
-                    // Cruzamos con la BD cruda para forzar la lectura del vencimiento
                     const prodRaw = rawProducts.find((p: any) => p.sku === product.sku)
                     const lotRaw = rawLots.find((l: any) => l.productId === product.id || l.sku === product.sku)
                     
@@ -169,6 +209,8 @@ function InventoryDashboard() {
                                  || lotRaw?.expirationDate 
                                  || prodRaw?.expirationDate 
                                  || null
+                                 
+                    const avgSales = product.averageDailySales || prodRaw?.averageDailySales || 0
 
                     return (
                       <article className="product-row" key={product.id || product.sku}>
@@ -177,7 +219,7 @@ function InventoryDashboard() {
                           <div>
                             <h3>{product.name}</h3>
                             <p>
-                              Venta prom: {product.averageDailySales || 0}/día 
+                              Venta prom: {avgSales}/día 
                               <span style={{ marginLeft: '12px', color: '#b91c1c', fontWeight: 500 }}>
                                 🗓️ Vence: {expDate ? formatDate(expDate) : 'Sin fecha'}
                               </span>
@@ -237,13 +279,35 @@ function InventoryDashboard() {
                 data={data}
                 disabled={isSubmitting}
                 onSubmit={(payload: any) => runMutation(() => addReceipt(payload), 'Boleta cargada correctamente.')}
+                onBatchSubmit={async (items: any[]) => {
+                  for (const item of items) {
+                    await addReceipt(item)
+                    await new Promise(resolve => setTimeout(resolve, 20))
+                  }
+                  await loadData()
+                  setMessage({ type: 'success', text: `${items.length} productos ingresados por boleta masiva.` })
+                }}
               />
             )}
 
             {actionMode === 'snapshot' && (
               <SnapshotForm
+                data={data}
                 disabled={isSubmitting}
                 onSubmit={(payload: any) => runMutation(() => saveDailySnapshot(payload), 'Conteo diario guardado.')}
+                onBatchUpdate={async (items: any[]) => {
+                  // Actualizamos directamente la BD local para ajustar stock real
+                  const rawProds = JSON.parse(localStorage.getItem('stock_products') || '[]')
+                  items.forEach(item => {
+                    const prodIndex = rawProds.findIndex((p: any) => p.sku.toLowerCase() === item.sku.toLowerCase())
+                    if (prodIndex >= 0) {
+                      rawProds[prodIndex].quantity = item.realQuantity
+                    }
+                  })
+                  localStorage.setItem('stock_products', JSON.stringify(rawProds))
+                  await loadData()
+                  setMessage({ type: 'success', text: `Stock ajustado para ${items.length} productos.` })
+                }}
               />
             )}
           </aside>
@@ -309,6 +373,13 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
         
         const expirationDate = parts[3]
 
+        // 5ta columna: Venta Promedio (Opcional)
+        let avgDailySales = 0
+        if (parts[4]) {
+           const rawAvg = parts[4].trim()
+           avgDailySales = parseFloat(rawAvg.replace(',', '.')) || 0
+        }
+
         items.push({
           id: crypto.randomUUID(),
           sku,
@@ -316,7 +387,7 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
           quantity,
           expirationDate,
           minimumStock: 0,
-          averageDailySales: 0,
+          averageDailySales: avgDailySales,
           unit: 'unidades',
           receivedDate: todayIso(),
         })
@@ -324,7 +395,7 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
     }
 
     if (items.length === 0) {
-      alert('Por favor copia las 4 columnas directamente desde Excel (SKU, Nombre, Cantidad, Vencimiento).')
+      alert('Por favor copia las columnas desde Excel (SKU, Nombre, Cantidad, Vencimiento, Vta Promedio).')
       return
     }
 
@@ -342,15 +413,9 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
 
       {isExcel ? (
         <div>
-          <textarea
-            rows={8}
-            value={excelText}
-            onChange={(e) => setExcelText(e.target.value)}
-            placeholder={'Pega aquí la lista corregida que te pasé arriba'}
-          />
-          <button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>
-            Importar todo Excel
-          </button>
+          <p style={{fontSize: '12px', color: '#666', marginBottom: '8px'}}>Columnas: SKU | Nombre | Cantidad | Vencimiento | Vta Promedio (Opc)</p>
+          <textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej: HAR-01  Harina  100  2026-12-01  2.5" />
+          <button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Importar todo Excel</button>
         </div>
       ) : (
         <form onSubmit={(e) => void handleSubmit(e)}>
@@ -367,23 +432,23 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
             <label className="field"><span>Venta prom. diaria</span><input type="number" name="averageDailySales" defaultValue="0" step="0.1" required /></label>
             <label className="field"><span>Vencimiento</span><input type="date" name="expirationDate" required /></label>
           </div>
-          <button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>
-            {disabled ? 'Guardando...' : 'Crear Producto'}
-          </button>
+          <button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>{disabled ? 'Guardando...' : 'Crear Producto'}</button>
         </form>
       )}
     </div>
   )
 }
 
-function ReceiptForm({ data, disabled, onSubmit }: any) {
+function ReceiptForm({ data, disabled, onSubmit, onBatchSubmit }: any) {
+  const [isExcel, setIsExcel] = useState(false)
+  const [excelText, setExcelText] = useState('')
   const [skuInput, setSkuInput] = useState('')
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const product = data.inventory?.find((p: any) => String(p.sku).toLowerCase() === skuInput.trim().toLowerCase())
     if (!product) {
-      alert(`El SKU "${skuInput}" no existe en tu inventario. Créalo primero en "Inicial / Excel".`)
+      alert(`El SKU "${skuInput}" no existe. Créalo primero.`)
       return
     }
     const form = new FormData(e.currentTarget)
@@ -397,47 +462,114 @@ function ReceiptForm({ data, disabled, onSubmit }: any) {
     setSkuInput('')
   }
 
+  async function handleBatch() {
+    const lines = excelText.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+    const items = []
+
+    for (const line of lines) {
+      const parts = line.split('\t').map(p => p.trim())
+      if (parts.length >= 3) {
+        const sku = parts[0]
+        const product = data.inventory?.find((p: any) => String(p.sku).toLowerCase() === sku.toLowerCase())
+        if (product) {
+           const rawQty = parts[1].trim()
+           const quantity = parseFloat(rawQty.replace(',', '.')) || 0
+           const expirationDate = parts[2]
+           items.push({
+             productId: product.id,
+             reference: 'CARGA-MASIVA',
+             quantity,
+             expirationDate,
+             receivedDate: todayIso()
+           })
+        }
+      }
+    }
+    if (items.length === 0) return alert('No se encontraron SKUs válidos. Columnas: SKU | Cantidad | Vencimiento')
+    await onBatchSubmit(items)
+    setExcelText('')
+  }
+
   return (
-    <form className="action-form" onSubmit={(e) => void handleSubmit(e)}>
+    <div className="action-form">
       <h2>Cargar boleta</h2>
-      <label className="field">
-        <span>SKU del Producto</span>
-        <input value={skuInput} onChange={(e) => setSkuInput(e.target.value)} required placeholder="Ej: 14933" />
-      </label>
-      <label className="field"><span>Nº de boleta / Referencia</span><input name="reference" required placeholder="Ej: BOL-1234" /></label>
-      <div className="field-pair">
-        <label className="field"><span>Cantidad</span><input type="number" name="quantity" required placeholder="0" /></label>
-        <label className="field"><span>Vencimiento</span><input type="date" name="expirationDate" required /></label>
+      <div style={{ display: 'flex', gap: '8px', margin: '12px 0' }}>
+        <button type="button" className={`mini-action ${!isExcel ? 'active' : ''}`} onClick={() => setIsExcel(false)}>Uno por uno</button>
+        <button type="button" className={`mini-action ${isExcel ? 'active' : ''}`} onClick={() => setIsExcel(true)}><Table size={14} /> Pegar desde Excel</button>
       </div>
-      <button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>
-        Sumar a Stock
-      </button>
-    </form>
+
+      {isExcel ? (
+         <div>
+          <p style={{fontSize: '12px', color: '#666', marginBottom: '8px'}}>Columnas: SKU | Cantidad comprada | Vencimiento</p>
+          <textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej: HAR-01  50  2026-10-15" />
+          <button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Ingresar Boleta Masiva</button>
+        </div>
+      ) : (
+        <form onSubmit={(e) => void handleSubmit(e)}>
+          <label className="field"><span>SKU del Producto</span><input value={skuInput} onChange={(e) => setSkuInput(e.target.value)} required placeholder="Ej: 14933" /></label>
+          <label className="field"><span>Nº de boleta / Referencia</span><input name="reference" required placeholder="Ej: BOL-1234" /></label>
+          <div className="field-pair">
+            <label className="field"><span>Cantidad</span><input type="number" name="quantity" required placeholder="0" /></label>
+            <label className="field"><span>Vencimiento</span><input type="date" name="expirationDate" required /></label>
+          </div>
+          <button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>Sumar a Stock</button>
+        </form>
+      )}
+    </div>
   )
 }
 
-function SnapshotForm({ disabled, onSubmit }: any) {
+function SnapshotForm({ data, disabled, onSubmit, onBatchUpdate }: any) {
+  const [isExcel, setIsExcel] = useState(false)
+  const [excelText, setExcelText] = useState('')
   const [notes, setNotes] = useState('')
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    await onSubmit({
-      snapshotDate: todayIso(),
-      notes,
-    })
+    await onSubmit({ snapshotDate: todayIso(), notes })
     setNotes('')
   }
 
+  async function handleBatch() {
+    const lines = excelText.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+    const items = []
+
+    for (const line of lines) {
+      const parts = line.split('\t').map(p => p.trim())
+      if (parts.length >= 2) {
+        const sku = parts[0]
+        const rawQty = parts[1].trim()
+        const quantity = parseFloat(rawQty.replace(',', '.')) || 0
+        items.push({ sku, realQuantity: quantity })
+      }
+    }
+    if (items.length === 0) return alert('Por favor copia las columnas: SKU | Cantidad Real')
+    if (confirm(`¿Pisar el stock de estos ${items.length} productos con los nuevos valores contados?`)) {
+      await onBatchUpdate(items)
+      setExcelText('')
+    }
+  }
+
   return (
-    <form className="action-form" onSubmit={(e) => void handleSubmit(e)}>
-      <h2>Conteo diario de cierre</h2>
-      <label className="field">
-        <span>Observaciones del día</span>
-        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Ej: Cierre de caja sin novedades." rows={4} />
-      </label>
-      <button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>
-        Guardar Conteo Diario
-      </button>
-    </form>
+    <div className="action-form">
+      <h2>Conteo / Ajuste de Stock</h2>
+      <div style={{ display: 'flex', gap: '8px', margin: '12px 0' }}>
+        <button type="button" className={`mini-action ${!isExcel ? 'active' : ''}`} onClick={() => setIsExcel(false)}>Nota diaria</button>
+        <button type="button" className={`mini-action ${isExcel ? 'active' : ''}`} onClick={() => setIsExcel(true)}><Table size={14} /> Ajuste masivo por Excel</button>
+      </div>
+
+      {isExcel ? (
+         <div>
+          <p style={{fontSize: '12px', color: '#666', marginBottom: '8px'}}>Columnas: SKU | Cantidad Real Contada</p>
+          <textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej: HAR-01  120" />
+          <button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Pisar Stock Viejo</button>
+        </div>
+      ) : (
+        <form onSubmit={(e) => void handleSubmit(e)}>
+          <label className="field"><span>Observaciones del día</span><textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Ej: Cierre de caja sin novedades." rows={4} /></label>
+          <button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>Guardar Nota</button>
+        </form>
+      )}
+    </div>
   )
 }
