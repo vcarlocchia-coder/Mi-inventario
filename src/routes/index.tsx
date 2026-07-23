@@ -99,9 +99,6 @@ function InventoryDashboard() {
     try { return JSON.parse(localStorage.getItem('stock_lots') || '[]') } catch { return [] }
   }, [data])
 
-  // ==========================================
-  // MOTOR FEFO (Cálculo Dinámico de Lotes)
-  // ==========================================
   const enrichedInventory = useMemo(() => {
     const today = new Date(todayIso());
     const thirtyDays = new Date(today);
@@ -122,7 +119,6 @@ function InventoryDashboard() {
         }
       });
       
-      // Ordenar lotes por fecha (FEFO)
       batches.sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime());
       
       const totalIn = batches.reduce((s, b) => s + b.qty, 0);
@@ -133,7 +129,6 @@ function InventoryDashboard() {
       
       const currentStock = totalIn - totalOut;
       
-      // Quemar stock viejo para encontrar el lote activo
       let activeExpDate = null;
       let burned = totalOut;
       for (const b of batches) {
@@ -174,7 +169,6 @@ function InventoryDashboard() {
     });
   }, [rawProducts, rawLots]);
 
-  // Aplicar Búsqueda y Filtros al Inventario
   const finalInventory = useMemo(() => {
     const query = search.trim().toLowerCase();
     return enrichedInventory.filter((p: any) => {
@@ -189,7 +183,6 @@ function InventoryDashboard() {
     });
   }, [enrichedInventory, search, filterMode]);
 
-  // Actualizar Tarjetas de Resumen
   const dashboardStats = useMemo(() => {
     let totalUnits = 0, expiringSoon = 0, expired = 0, risk = 0;
 
@@ -203,7 +196,6 @@ function InventoryDashboard() {
     return { totalUnits, expiringSoon, expired, risk, totalProducts: enrichedInventory.length };
   }, [enrichedInventory]);
 
-  // Procesar e integrar Búsqueda en el Historial
   const historyData = useMemo(() => {
     const raw = rawLots.map((lot: any) => {
       const prod = rawProducts.find((p: any) => p.id === lot.productId || p.sku === lot.sku)
@@ -349,7 +341,7 @@ function InventoryDashboard() {
                               <span style={{ margin: '0 8px' }}>|</span>
                               📅 Carga: {formatDate(lot.receivedDate || lot.createdAt || todayIso())}
                               <span style={{ margin: '0 8px' }}>|</span>
-                              🗓️ Vence: {formatDate(lot.expirationDate)}
+                              🗓️ Vence: {lot.expirationDate ? formatDate(lot.expirationDate) : 'Sin fecha'}
                             </p>
                           </div>
                         </div>
@@ -425,12 +417,13 @@ function InventoryDashboard() {
                 onBatchUpdate={async (items: any[]) => {
                   const rawProds = JSON.parse(localStorage.getItem('stock_products') || '[]')
                   const rawL = JSON.parse(localStorage.getItem('stock_lots') || '[]')
+                  let lotsChanged = false;
                   
                   items.forEach(item => {
                     const prodIndex = rawProds.findIndex((p: any) => p.sku.toLowerCase() === item.sku.toLowerCase())
                     if (prodIndex >= 0) {
                       const prod = rawProds[prodIndex];
-                      // Asegurar que el stock inicial nunca se pierda
+                      
                       const initialQty = prod.initialQuantity !== undefined ? prod.initialQuantity : (prod.quantity || 0);
                       const pLots = rawL.filter((l:any) => l.productId === prod.id || l.sku === prod.sku);
                       const totalIn = initialQty + pLots.reduce((s:number, l:any) => s + (l.quantity || 0), 0);
@@ -438,11 +431,23 @@ function InventoryDashboard() {
                       const newTotalOut = totalIn - item.realQuantity;
                       
                       if (newTotalOut < 0) {
-                        // Si encontraste MÁS stock del que alguna vez ingresaste
-                        rawProds[prodIndex].initialQuantity = initialQty + Math.abs(newTotalOut);
+                        const excess = Math.abs(newTotalOut);
+                        rawL.push({
+                          id: crypto.randomUUID(),
+                          productId: prod.id,
+                          sku: prod.sku,
+                          reference: 'AJUSTE-SOBRANTE',
+                          quantity: excess,
+                          expirationDate: '', 
+                          receivedDate: todayIso()
+                        });
+                        lotsChanged = true;
+                        
                         rawProds[prodIndex].totalOut = 0;
+                        if (prod.initialQuantity === undefined) {
+                          rawProds[prodIndex].initialQuantity = initialQty;
+                        }
                       } else {
-                        // Guardamos cuánto se vendió/consumió para que el FEFO queme los lotes viejos
                         rawProds[prodIndex].totalOut = newTotalOut;
                         if (prod.initialQuantity === undefined) {
                           rawProds[prodIndex].initialQuantity = initialQty;
@@ -451,6 +456,9 @@ function InventoryDashboard() {
                     }
                   })
                   localStorage.setItem('stock_products', JSON.stringify(rawProds))
+                  if (lotsChanged) {
+                    localStorage.setItem('stock_lots', JSON.stringify(rawL))
+                  }
                   await loadData()
                   setMessage({ type: 'success', text: `Stock ajustado (FEFO actualizado) para ${items.length} productos.` })
                 }}
