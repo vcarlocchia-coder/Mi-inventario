@@ -1,127 +1,66 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
-
 import {
-
   AlertTriangle,
-
   ArrowDownToLine,
-
   Boxes,
-
   CalendarClock,
-
   Check,
-
   ChevronRight,
-
   ClipboardPaste,
-
   FilePlus2,
-
   PackageOpen,
-
   Plus,
-
   ReceiptText,
-
   RotateCcw,
-
   Search,
-
   ShieldCheck,
-
   Sparkles,
-
+  Table,
   XCircle,
-
 } from 'lucide-react'
-
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
-
 import {
-
   addReceipt,
-
   createInitialStock,
-
   getInventoryDashboard,
-
   saveDailySnapshot,
-
 } from '../../inventory.functions'
 
-
-
 export const Route = createFileRoute('/')({
-
   loader: () => getInventoryDashboard(),
-
   component: InventoryDashboard,
-
 })
-
-
 
 type ActionMode = 'initial' | 'receipt' | 'snapshot'
-
 type DashboardData = Awaited<ReturnType<typeof getInventoryDashboard>>
-
 type SnapshotPayload = { snapshotDate: string; notes: string; items: Array<{ sku: string; quantity: number }> }
-
 type ReceiptPayload = { productId: number; reference: string; quantity: number; expirationDate: string; receivedDate: string }
-
 type InitialPayload = { sku: string; name: string; unit: string; minimumStock: number; averageDailySales: number; quantity: number; expirationDate: string; receivedDate: string }
 
-
 const dateFormatter = new Intl.DateTimeFormat('es-CL', {
-
   day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC',
-
 })
-
 const monthFormatter = new Intl.DateTimeFormat('es-CL', { month: 'short', timeZone: 'UTC' })
-
 const numberFormatter = new Intl.NumberFormat('es-CL')
 
-
-
 function todayIso() {
-
   return new Date().toISOString().slice(0, 10)
-
 }
-
-
 
 function formatDate(value: string) {
-
   return dateFormatter.format(new Date(`${value}T00:00:00Z`))
-
 }
-
-
 
 function getErrorMessage(error: unknown) {
-
   return error instanceof Error ? error.message : 'No se pudo guardar. Revisa los datos e intenta nuevamente.'
-
 }
-
-
 
 function expiryLabel(days: number) {
-
   if (days < 0) return `Venció hace ${Math.abs(days)} días`
-
   if (days === 0) return 'Vence hoy'
-
   if (days === 1) return 'Vence mañana'
-
   return `Vence en ${days} días`
-
 }
-
-
 
 function InventoryDashboard() {
   const data = Route.useLoaderData()
@@ -275,12 +214,16 @@ function InventoryDashboard() {
             <div className="action-tabs">
               <button className={actionMode === 'snapshot' ? 'active' : ''} onClick={() => selectAction('snapshot')}><ClipboardPaste size={17} /> Conteo</button>
               <button className={actionMode === 'receipt' ? 'active' : ''} onClick={() => selectAction('receipt')}><ReceiptText size={17} /> Boleta</button>
-              <button className={actionMode === 'initial' ? 'active' : ''} onClick={() => selectAction('initial')}><FilePlus2 size={17} /> Inicial</button>
+              <button className={actionMode === 'initial' ? 'active' : ''} onClick={() => selectAction('initial')}><FilePlus2 size={17} /> Inicial / Excel</button>
             </div>
             {message && <div className={`form-message ${message.type}`}>{message.type === 'success' ? <Check size={17} /> : <XCircle size={17} />}<span>{message.text}</span></div>}
-            {actionMode === 'snapshot' && <SnapshotForm data={data} disabled={isSubmitting} onSubmit={(payload) => runMutation(() => saveDailySnapshot({ data: payload }), 'Conteo de apertura guardado y stock actualizado.')} />}
-            {actionMode === 'receipt' && <ReceiptForm data={data} disabled={isSubmitting} onSubmit={(payload) => runMutation(() => addReceipt({ data: payload }), 'Boleta cargada. El nuevo lote ya está sumado al stock.')} />}
-            {actionMode === 'initial' && <InitialStockForm disabled={isSubmitting} onSubmit={(payload) => runMutation(() => createInitialStock({ data: payload }), 'Producto y stock inicial creados correctamente.')} />}
+            {actionMode === 'snapshot' && <SnapshotForm data={data} disabled={isSubmitting} onSubmit={(payload) => runMutation(() => saveDailySnapshot(payload), 'Conteo de apertura guardado y stock actualizado.')} />}
+            {actionMode === 'receipt' && <ReceiptForm data={data} disabled={isSubmitting} onSubmit={(payload) => runMutation(() => addReceipt(payload), 'Boleta cargada. El nuevo lote ya está sumado al stock.')} />}
+            {actionMode === 'initial' && <InitialStockForm disabled={isSubmitting} onSubmit={(payload) => runMutation(() => createInitialStock(payload), 'Producto y stock inicial creados correctamente.')} onBatchSubmit={async (items) => {
+              for (const item of items) {
+                await runMutation(() => createInitialStock(item), `Cargado: ${item.name}`)
+              }
+            }} />}
             <div className="action-footnote"><ShieldCheck size={16} /><span>Cada ingreso conserva su boleta y fecha de vencimiento.</span></div>
           </aside>
         </div>
@@ -298,22 +241,13 @@ function InventoryDashboard() {
   )
 }
 
-
 function StatCard({ icon, label, value, detail, tone }: { icon: ReactNode; label: string; value: string; detail: string; tone: string }) {
-
   return <article className={`stat-card ${tone}`}><span className="stat-icon">{icon}</span><div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div></article>
-
 }
-
-
 
 function EmptyInventory({ hasProducts, onCreate }: { hasProducts: boolean; onCreate: () => void }) {
-
-  return <div className="empty-state"><span className="empty-illustration"><Boxes size={38} /></span><div><h3>{hasProducts ? 'No hay coincidencias' : 'Tu bodega parte aquí'}</h3><p>{hasProducts ? 'Prueba otro término o cambia el filtro.' : 'Crea el primer producto con su cantidad y vencimiento base.'}</p></div>{!hasProducts && <button className="secondary-button" onClick={onCreate}><Plus size={16} /> Cargar stock inicial</button>}</div>
-
+  return <div className="empty-state"><span className="empty-illustration"><Boxes size={38} /></span><div><h3>{hasProducts ? 'No hay coincidencia' : 'Tu bodega parte aquí'}</h3><p>{hasProducts ? 'Prueba otro término o cambia el filtro.' : 'Crea el primer producto con su cantidad y vencimiento base.'}</p></div>{!hasProducts && <button className="secondary-button" onClick={onCreate}><Plus size={16} /> Cargar stock inicial</button>}</div>
 }
-
-
 
 function SnapshotForm({ data, disabled, onSubmit }: { data: DashboardData; disabled: boolean; onSubmit: (payload: SnapshotPayload) => Promise<void> }) {
   const suggestedRows = data.inventory.map((product) => `${product.sku};${product.currentStock}`).join('\n')
@@ -323,22 +257,19 @@ function SnapshotForm({ data, disabled, onSubmit }: { data: DashboardData; disab
     event.preventDefault()
     const form = new FormData(event.currentTarget)
     
-    // 1. Extraemos todo lo que pegaste (la lista gigante)
     const allItems = rawStock.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
       const [sku, quantity] = line.split(/[;,\t ]+/)
       return { sku: sku?.trim() ?? '', quantity: Number(quantity) }
     })
 
-    // 2. FILTRO ESTRICTO: Solo nos quedamos con los que coinciden con tu base inicial
     const knownSkus = data.inventory.map(p => p.sku.toLowerCase())
     const items = allItems.filter(item => knownSkus.includes(item.sku.toLowerCase()))
 
     if (items.some((item) => !item.sku || !Number.isInteger(item.quantity) || item.quantity < 0)) {
-      window.alert('Revisa los datos: Asegurate de usar el formato SKU;CANTIDAD.')
+      window.alert('Revisa los datos: Asegúrate de usar el formato SKU;CANTIDAD.')
       return
     }
 
-    // 3. Avisamos si de toda la lista no rescató ni un solo SKU válido
     if (items.length === 0) {
       window.alert('Atención: Ninguno de los SKUs que pegaste coincide con los de tu base inicial.')
       return
@@ -351,10 +282,10 @@ function SnapshotForm({ data, disabled, onSubmit }: { data: DashboardData; disab
     <form className="action-form" onSubmit={(event) => void handleSubmit(event)}>
       <div className="form-intro">
         <span className="form-number">01</span>
-        <div><h2>Pegar stock de apertura</h2><p>Pegá tu lista completa. El sistema solo filtrará y descontará los SKUs cargados en tu base.</p></div>
+        <div><h2>Pegar stock de apertura</h2><p>Pegá tu lista completa. El sistema filtrará y descontará los SKUs cargados en tu base.</p></div>
       </div>
       <label className="field"><span>Fecha del conteo</span><input type="date" name="snapshotDate" defaultValue={todayIso()} required /></label>
-      <label className="field"><span>Base diaria <small>SKU;CANTIDAD</small></span><textarea value={rawStock} onChange={(event) => setRawStock(event.target.value)} placeholder={'HAR-001;24\nLEC-200;12'} rows={10} required /></label>
+      <label className="field"><span>Base diaria <small>SKU;CANTIDAD</small></span><textarea value={rawStock} onChange={(event) => setRawStock(event.target.value)} placeholder={'HAR-001;24\nLEC-200;12'} rows={8} required /></label>
       <button className="mini-action" type="button" onClick={() => setRawStock(suggestedRows)}><RotateCcw size={14} /> Usar stock calculado como base</button>
       <label className="field"><span>Observación <small>opcional</small></span><input name="notes" placeholder="Ej. Conteo turno mañana" maxLength={300} /></label>
       <button className="submit-button" disabled={disabled || data.inventory.length === 0}><ArrowDownToLine size={18} /> {disabled ? 'Guardando…' : 'Actualizar inventario'}</button>
@@ -370,11 +301,10 @@ function ReceiptForm({ data, disabled, onSubmit }: { data: DashboardData; disabl
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     
-    // VERIFICACIÓN: Buscamos si el SKU escrito existe realmente en la base
     const product = data.inventory.find(p => p.sku.toLowerCase() === skuInput.trim().toLowerCase())
     
     if (!product) {
-      window.alert(`⚠️ El SKU "${skuInput}" no existe en tu base inicial.\n\nPor favor, verificá que esté bien escrito o andá a la pestaña "Inicial" para dar de alta el producto primero.`)
+      window.alert(`⚠️ El SKU "${skuInput}" no existe en tu base inicial.\n\nVerifica que esté bien escrito o ve a "Inicial" para crearlo.`)
       return
     }
 
@@ -395,17 +325,16 @@ function ReceiptForm({ data, disabled, onSubmit }: { data: DashboardData; disabl
     <form className="action-form" onSubmit={(event) => void handleSubmit(event)}>
       <div className="form-intro">
         <span className="form-number">02</span>
-        <div><h2>Cargar una boleta</h2><p>Suma un lote nuevo. Si ingresas un SKU desconocido, se bloqueará la carga.</p></div>
+        <div><h2>Cargar una boleta</h2><p>Suma un lote nuevo a un producto existente.</p></div>
       </div>
       
       <label className="field">
         <span>SKU del Producto</span>
-        {/* Le agregamos un datalist para que te sugiera SKUs a medida que escribís */}
         <input 
           name="skuField" 
           value={skuInput} 
           onChange={(e) => setSkuInput(e.target.value)} 
-          placeholder="Escribí o pegá el SKU (Ej: HAR-001)" 
+          placeholder="Escribe o pega el SKU (Ej: HAR-001)" 
           list="skus-disponibles"
           required 
         />
@@ -425,9 +354,10 @@ function ReceiptForm({ data, disabled, onSubmit }: { data: DashboardData; disabl
   )
 }
 
+function InitialStockForm({ disabled, onSubmit, onBatchSubmit }: { disabled: boolean; onSubmit: (payload: InitialPayload) => Promise<void>; onBatchSubmit: (items: InitialPayload[]) => Promise<void> }) {
+  const [isExcelMode, setIsExcelMode] = useState(false)
+  const [excelData, setExcelData] = useState('')
 
-
-function InitialStockForm({ disabled, onSubmit }: { disabled: boolean; onSubmit: (payload: InitialPayload) => Promise<void> }) {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const formElement = event.currentTarget
@@ -437,32 +367,102 @@ function InitialStockForm({ disabled, onSubmit }: { disabled: boolean; onSubmit:
       name: String(form.get('name')), 
       unit: String(form.get('unit')), 
       minimumStock: Number(form.get('minimumStock')), 
-      averageDailySales: Number(form.get('averageDailySales')), // <-- El nuevo dato
+      averageDailySales: Number(form.get('averageDailySales')), 
       quantity: Number(form.get('quantity')), 
       expirationDate: String(form.get('expirationDate')), 
       receivedDate: String(form.get('receivedDate')) 
     })
     formElement.reset()
   }
+
+  async function handleBatchSubmit() {
+    if (!excelData.trim()) return
+    const lines = excelData.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+    const items: InitialPayload[] = []
+
+    for (const line of lines) {
+      // Formato esperado tabulado de Excel: SKU  NOMBRE  CANTIDAD  VENCIMIENTO (YYYY-MM-DD)  [MIN]  [VENTA_DIARIA]
+      const parts = line.split(/[\t;]+/)
+      if (parts.length >= 4) {
+        items.push({
+          sku: parts[0].trim(),
+          name: parts[1].trim(),
+          quantity: Number(parts[2]) || 1,
+          expirationDate: parts[3].trim(),
+          minimumStock: Number(parts[4]) || 0,
+          averageDailySales: Number(parts[5]) || 0,
+          unit: parts[6]?.trim() || 'unidades',
+          receivedDate: todayIso(),
+        })
+      }
+    }
+
+    if (items.length === 0) {
+      window.alert('No se pudieron reconocer columnas. Asegúrate de copiar directo desde Excel:\nSKU | NOMBRE | CANTIDAD | VENCIMIENTO (AAAA-MM-DD)')
+      return
+    }
+
+    await onBatchSubmit(items)
+    setExcelData('')
+    setIsExcelMode(false)
+  }
+
   return (
-    <form className="action-form" onSubmit={(event) => void handleSubmit(event)}>
-      <div className="form-intro"><span className="form-number">00</span><div><h2>Crear stock inicial</h2><p>Da de alta un producto y su primer lote.</p></div></div>
-      <div className="field-pair"><label className="field"><span>SKU</span><input name="sku" placeholder="HAR-001" required maxLength={60} /></label><label className="field"><span>Unidad</span><input name="unit" defaultValue="unidades" required maxLength={30} /></label></div>
-      <label className="field"><span>Nombre del producto</span><input name="name" placeholder="Harina sin polvos 1 kg" required maxLength={160} /></label>
-      
-      <div className="field-pair">
-        <label className="field"><span>Cantidad inicial</span><input type="number" name="quantity" min="1" step="1" required /></label>
-        <label className="field"><span>Stock mínimo</span><input type="number" name="minimumStock" min="0" step="1" defaultValue="0" required /></label>
+    <div className="action-form">
+      <div className="form-intro">
+        <span className="form-number">00</span>
+        <div>
+          <h2>Crear stock inicial</h2>
+          <p>Alta de productos. Individual o pegando tablas de Excel.</p>
+        </div>
       </div>
-      
-      <div className="field-pair">
-        <label className="field"><span>Venta Prom. Diaria</span><input type="number" name="averageDailySales" min="0" step="0.1" defaultValue="0" required /></label>
-        <label className="field"><span>Fecha base</span><input type="date" name="receivedDate" defaultValue={todayIso()} required /></label>
+
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+        <button className={`mini-action ${!isExcelMode ? 'active' : ''}`} type="button" onClick={() => setIsExcelMode(false)}>
+          Formulario individual
+        </button>
+        <button className={`mini-action ${isExcelMode ? 'active' : ''}`} type="button" onClick={() => setIsExcelMode(true)}>
+          <Table size={14} /> Cargar desde Excel
+        </button>
       </div>
-      
-      <label className="field"><span>Vencimiento</span><input type="date" name="expirationDate" required /></label>
-      <button className="submit-button" disabled={disabled}><FilePlus2 size={18} /> {disabled ? 'Creando…' : 'Crear producto y lote'}</button>
-    </form>
+
+      {isExcelMode ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <label className="field">
+            <span>Pegar columnas de Excel <small>SKU | Nombre | Cantidad | Vencimiento (YYYY-MM-DD)</small></span>
+            <textarea
+              rows={8}
+              value={excelData}
+              onChange={(e) => setExcelData(e.target.value)}
+              placeholder={`HAR-001\tHarina 1kg\t50\t2026-12-31\nLEC-002\tLeche Entera\t30\t2026-09-15`}
+            />
+          </label>
+          <button className="submit-button" disabled={disabled || !excelData.trim()} onClick={() => void handleBatchSubmit()}>
+            <FilePlus2 size={18} /> {disabled ? 'Procesando masivo...' : 'Importar todo Excel a la base'}
+          </button>
+        </div>
+      ) : (
+        <form onSubmit={(event) => void handleSubmit(event)}>
+          <div className="field-pair">
+            <label className="field"><span>SKU</span><input name="sku" placeholder="HAR-001" required maxLength={60} /></label>
+            <label className="field"><span>Unidad</span><input name="unit" defaultValue="unidades" required maxLength={30} /></label>
+          </div>
+          <label className="field"><span>Nombre del producto</span><input name="name" placeholder="Harina sin polvos 1 kg" required maxLength={160} /></label>
+          
+          <div className="field-pair">
+            <label className="field"><span>Cantidad inicial</span><input type="number" name="quantity" min="1" step="1" required /></label>
+            <label className="field"><span>Stock mínimo</span><input type="number" name="minimumStock" min="0" step="1" defaultValue="0" required /></label>
+          </div>
+          
+          <div className="field-pair">
+            <label className="field"><span>Venta Prom. Diaria</span><input type="number" name="averageDailySales" min="0" step="0.1" defaultValue="0" required /></label>
+            <label className="field"><span>Fecha base</span><input type="date" name="receivedDate" defaultValue={todayIso()} required /></label>
+          </div>
+          
+          <label className="field"><span>Vencimiento</span><input type="date" name="expirationDate" required /></label>
+          <button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}><FilePlus2 size={18} /> {disabled ? 'Creando…' : 'Crear producto y lote'}</button>
+        </form>
+      )}
+    </div>
   )
 }
-
