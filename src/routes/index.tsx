@@ -1,21 +1,17 @@
 import { createFileRoute } from '@tanstack/react-router'
 import {
   AlertTriangle,
-  ArrowDownToLine,
   Boxes,
   CalendarClock,
-  Check,
-  ChevronRight,
   ClipboardPaste,
   FilePlus2,
   PackageOpen,
-  Plus,
   ReceiptText,
-  RotateCcw,
   Search,
   ShieldCheck,
   Sparkles,
   Table,
+  Trash2,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
@@ -72,11 +68,21 @@ function InventoryDashboard() {
     void loadData()
   }, [])
 
+  const handleClearAll = () => {
+    if (confirm('¿Estás seguro de que querés BORRAR TODO el inventario para empezar de cero?')) {
+      localStorage.removeItem('stock_products')
+      localStorage.removeItem('stock_lots')
+      localStorage.removeItem('stock_snapshots')
+      void loadData()
+      setMessage({ type: 'success', text: 'Inventario vaciado por completo.' })
+    }
+  }
+
   const filteredInventory = useMemo(() => {
     if (!data?.inventory) return []
     const query = search.trim().toLowerCase()
     return data.inventory.filter((product: any) => {
-      return !query || product.name.toLowerCase().includes(query) || product.sku.toLowerCase().includes(query)
+      return !query || product.name.toLowerCase().includes(query) || String(product.sku).toLowerCase().includes(query)
     })
   }, [data, search])
 
@@ -128,11 +134,14 @@ function InventoryDashboard() {
             <section className="panel inventory-panel">
               <div className="panel-heading">
                 <div><span className="section-kicker">Existencias</span><h2>Inventario actual</h2></div>
-                <div className="inventory-tools">
+                <div className="inventory-tools" style={{ display: 'flex', gap: '8px' }}>
                   <label className="search-box">
                     <Search size={17} />
                     <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar SKU o producto" />
                   </label>
+                  <button onClick={handleClearAll} style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', padding: '0 12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}>
+                    <Trash2 size={15} /> Vaciar Todo
+                  </button>
                 </div>
               </div>
 
@@ -183,11 +192,14 @@ function InventoryDashboard() {
                 disabled={isSubmitting}
                 onSubmit={(payload: any) => runMutation(() => createInitialStock(payload), 'Producto guardado con éxito.')}
                 onBatchSubmit={async (items: any[]) => {
+                  localStorage.setItem('stock_products', JSON.stringify([]))
+                  localStorage.setItem('stock_lots', JSON.stringify([]))
+
                   for (const item of items) {
                     await createInitialStock(item)
                   }
                   await loadData()
-                  setMessage({ type: 'success', text: `${items.length} productos cargados desde Excel.` })
+                  setMessage({ type: 'success', text: `${items.length} productos cargados perfectamente desde Excel.` })
                 }}
               />
             )}
@@ -249,25 +261,37 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
   async function handleBatch() {
     const lines = excelText.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
     const items = []
+
     for (const line of lines) {
-      const parts = line.split(/[\t;]+/)
+      const parts = line.split('\t').map(p => p.trim())
+      
       if (parts.length >= 4) {
+        const sku = parts[0]
+        const name = parts[1]
+        
+        const rawQty = parts[2].replace(/\./g, '').replace(',', '.')
+        const quantity = parseFloat(rawQty) || 0
+        
+        const expirationDate = parts[3]
+
         items.push({
-          sku: parts[0].trim(),
-          name: parts[1].trim(),
-          quantity: Number(parts[2]) || 1,
-          expirationDate: parts[3].trim(),
-          minimumStock: Number(parts[4]) || 0,
-          averageDailySales: Number(parts[5]) || 0,
-          unit: parts[6]?.trim() || 'unidades',
+          sku,
+          name,
+          quantity,
+          expirationDate,
+          minimumStock: 0,
+          averageDailySales: 0,
+          unit: 'unidades',
           receivedDate: todayIso(),
         })
       }
     }
+
     if (items.length === 0) {
-      alert('Copiá celdas directamente desde Excel en formato: SKU | NOMBRE | CANTIDAD | VENCIMIENTO (YYYY-MM-DD)')
+      alert('Por favor copia las 4 columnas directamente desde Excel (SKU, Nombre, Cantidad, Vencimiento).')
       return
     }
+
     await onBatchSubmit(items)
     setExcelText('')
   }
@@ -286,7 +310,7 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
             rows={8}
             value={excelText}
             onChange={(e) => setExcelText(e.target.value)}
-            placeholder={'HAR-001\tHarina 1kg\t50\t2026-12-31\nLEC-002\tLeche Entera\t30\t2026-09-15'}
+            placeholder={'Pega aquí la lista corregida que te pasé arriba'}
           />
           <button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>
             Importar todo Excel
@@ -321,9 +345,9 @@ function ReceiptForm({ data, disabled, onSubmit }: any) {
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    const product = data.inventory?.find((p: any) => p.sku.toLowerCase() === skuInput.trim().toLowerCase())
+    const product = data.inventory?.find((p: any) => String(p.sku).toLowerCase() === skuInput.trim().toLowerCase())
     if (!product) {
-      alert(`El SKU "${skuInput}" no existe en tu inventario. Cralo primero en la pestaña "Inicial / Excel".`)
+      alert(`El SKU "${skuInput}" no existe en tu inventario. Créalo primero en "Inicial / Excel".`)
       return
     }
     const form = new FormData(e.currentTarget)
@@ -342,7 +366,7 @@ function ReceiptForm({ data, disabled, onSubmit }: any) {
       <h2>Cargar boleta</h2>
       <label className="field">
         <span>SKU del Producto</span>
-        <input value={skuInput} onChange={(e) => setSkuInput(e.target.value)} required placeholder="Ej: HAR-001" />
+        <input value={skuInput} onChange={(e) => setSkuInput(e.target.value)} required placeholder="Ej: 14933" />
       </label>
       <label className="field"><span>Nº de boleta / Referencia</span><input name="reference" required placeholder="Ej: BOL-1234" /></label>
       <div className="field-pair">
@@ -373,7 +397,7 @@ function SnapshotForm({ disabled, onSubmit }: any) {
       <h2>Conteo diario de cierre</h2>
       <label className="field">
         <span>Observaciones del día</span>
-        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Ej: Cierre de caja turno tarde sin novedades." rows={4} />
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Ej: Cierre de caja sin novedades." rows={4} />
       </label>
       <button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>
         Guardar Conteo Diario
