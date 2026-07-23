@@ -12,7 +12,6 @@ import {
   Sparkles,
   Table,
   Trash2,
-  Filter,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
@@ -38,9 +37,17 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10)
 }
 
+// Escudo anti-errores: Si la fecha es basura, devuelve el texto crudo en vez de crashear
 function formatDate(value: string) {
   if (!value) return ''
-  return dateFormatter.format(new Date(`${value}T00:00:00Z`))
+  try {
+    let d = new Date(value.includes('T') ? value : `${value}T00:00:00Z`)
+    if (isNaN(d.getTime())) d = new Date(value)
+    if (isNaN(d.getTime())) return value 
+    return dateFormatter.format(d)
+  } catch {
+    return value
+  }
 }
 
 function InventoryDashboard() {
@@ -110,18 +117,23 @@ function InventoryDashboard() {
       const avgSales = product.averageDailySales || prodRaw?.averageDailySales || 0;
 
       if (expDateStr) {
-        const expDate = new Date(`${expDateStr}T00:00:00Z`);
-        if (expDate < today) {
-          expired += currentStock;
-        } else if (expDate <= thirtyDays) {
-          expiringSoon += currentStock;
-        }
+        // Cálculo protegido
+        let expDate = new Date(`${expDateStr}T00:00:00Z`);
+        if (isNaN(expDate.getTime())) expDate = new Date(expDateStr);
 
-        if (avgSales > 0 && expDate >= today) {
-          const daysToSell = currentStock / avgSales;
-          const daysToExpire = (expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24);
-          if (daysToSell > daysToExpire) {
-            risk += currentStock;
+        if (!isNaN(expDate.getTime())) {
+          if (expDate < today) {
+            expired += currentStock;
+          } else if (expDate <= thirtyDays) {
+            expiringSoon += currentStock;
+          }
+
+          if (avgSales > 0 && expDate >= today) {
+            const daysToSell = currentStock / avgSales;
+            const daysToExpire = (expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24);
+            if (daysToSell > daysToExpire) {
+              risk += currentStock;
+            }
           }
         }
       }
@@ -141,6 +153,8 @@ function InventoryDashboard() {
       const matchesSearch = !query || product.name.toLowerCase().includes(query) || String(product.sku).toLowerCase().includes(query)
       if (!matchesSearch) return false
 
+      if (filterMode === 'all') return true
+
       const prodRaw = rawProducts.find((p: any) => p.sku === product.sku);
       const lotRaw = rawLots.find((l: any) => l.productId === product.id || l.sku === product.sku);
       
@@ -148,10 +162,12 @@ function InventoryDashboard() {
       const avgSales = product.averageDailySales || prodRaw?.averageDailySales || 0;
       const currentStock = product.currentStock || 0;
 
-      if (filterMode === 'all') return true
-
       if (!expDateStr) return false
-      const expDate = new Date(`${expDateStr}T00:00:00Z`);
+      
+      // Cálculo protegido
+      let expDate = new Date(`${expDateStr}T00:00:00Z`);
+      if (isNaN(expDate.getTime())) expDate = new Date(expDateStr);
+      if (isNaN(expDate.getTime())) return false; // Ignorar en filtros si la fecha es muy basura
 
       if (filterMode === 'expired') {
         return expDate < today
