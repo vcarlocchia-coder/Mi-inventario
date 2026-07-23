@@ -99,102 +99,132 @@ function InventoryDashboard() {
     try { return JSON.parse(localStorage.getItem('stock_lots') || '[]') } catch { return [] }
   }, [data])
 
-  // CÁLCULO DE HISTORIAL CRUZANDO LOTES CON PRODUCTOS
+  // ==========================================
+  // MOTOR FEFO (Cálculo Dinámico de Lotes)
+  // ==========================================
+  const enrichedInventory = useMemo(() => {
+    const today = new Date(todayIso());
+    const thirtyDays = new Date(today);
+    thirtyDays.setDate(today.getDate() + 30);
+
+    return rawProducts.map((prodRaw: any) => {
+      const pLots = rawLots.filter((l: any) => l.productId === prodRaw.id || l.sku === prodRaw.sku);
+      
+      const initialQty = prodRaw.initialQuantity !== undefined ? prodRaw.initialQuantity : (prodRaw.quantity || 0);
+      
+      let batches: any[] = [];
+      if (initialQty > 0) {
+        batches.push({ date: prodRaw.expirationDate || '2099-12-31', qty: initialQty });
+      }
+      pLots.forEach((l: any) => {
+        if (l.quantity > 0) {
+          batches.push({ date: l.expirationDate || '2099-12-31', qty: l.quantity });
+        }
+      });
+      
+      // Ordenar lotes por fecha (FEFO)
+      batches.sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      
+      const totalIn = batches.reduce((s, b) => s + b.qty, 0);
+      let totalOut = prodRaw.totalOut || 0;
+      
+      if (totalOut < 0) totalOut = 0;
+      if (totalOut > totalIn) totalOut = totalIn;
+      
+      const currentStock = totalIn - totalOut;
+      
+      // Quemar stock viejo para encontrar el lote activo
+      let activeExpDate = null;
+      let burned = totalOut;
+      for (const b of batches) {
+        if (burned >= b.qty) {
+          burned -= b.qty;
+        } else {
+          activeExpDate = b.date === '2099-12-31' ? null : b.date;
+          break;
+        }
+      }
+
+      const avgSales = prodRaw.averageDailySales || 0;
+      let isExpired = false;
+      let isExpiringSoon = false;
+      let isRisk = false;
+
+      if (activeExpDate) {
+        const expD = new Date(`${activeExpDate}T00:00:00Z`);
+        if (expD < today) isExpired = true;
+        else if (expD <= thirtyDays) isExpiringSoon = true;
+        
+        if (avgSales > 0 && expD >= today) {
+          const daysToSell = currentStock / avgSales;
+          const daysToExpire = (expD.getTime() - today.getTime()) / (1000 * 60 * 60 * 24);
+          if (daysToSell > daysToExpire) isRisk = true;
+        }
+      }
+
+      return {
+        ...prodRaw,
+        currentStock,
+        activeExpDate,
+        avgSales,
+        isExpired,
+        isExpiringSoon,
+        isRisk
+      };
+    });
+  }, [rawProducts, rawLots]);
+
+  // Aplicar Búsqueda y Filtros al Inventario
+  const finalInventory = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return enrichedInventory.filter((p: any) => {
+      if (query && !p.name.toLowerCase().includes(query) && !String(p.sku).toLowerCase().includes(query)) return false;
+      
+      if (filterMode === 'all') return true;
+      if (filterMode === 'expired') return p.isExpired;
+      if (filterMode === 'expiringSoon') return p.isExpiringSoon;
+      if (filterMode === 'risk') return p.isRisk;
+      
+      return true;
+    });
+  }, [enrichedInventory, search, filterMode]);
+
+  // Actualizar Tarjetas de Resumen
+  const dashboardStats = useMemo(() => {
+    let totalUnits = 0, expiringSoon = 0, expired = 0, risk = 0;
+
+    enrichedInventory.forEach((p: any) => {
+      totalUnits += p.currentStock;
+      if (p.isExpired) expired += p.currentStock;
+      else if (p.isExpiringSoon) expiringSoon += p.currentStock;
+      if (p.isRisk) risk += p.currentStock;
+    });
+
+    return { totalUnits, expiringSoon, expired, risk, totalProducts: enrichedInventory.length };
+  }, [enrichedInventory]);
+
+  // Procesar e integrar Búsqueda en el Historial
   const historyData = useMemo(() => {
-    return rawLots.map((lot: any) => {
+    const raw = rawLots.map((lot: any) => {
       const prod = rawProducts.find((p: any) => p.id === lot.productId || p.sku === lot.sku)
       return {
         ...lot,
         sku: prod?.sku || lot.sku || 'Desconocido',
         name: prod?.name || 'Producto eliminado',
       }
-    }).reverse() // Reverse para ver los más nuevos arriba
-  }, [rawLots, rawProducts])
+    }).reverse()
 
-  const dashboardStats = useMemo(() => {
-    let totalUnits = 0;
-    let expiringSoon = 0;
-    let expired = 0;
-    let risk = 0;
+    const query = search.trim().toLowerCase();
+    if (!query) return raw;
 
-    const today = new Date(todayIso());
-    const thirtyDays = new Date(today);
-    thirtyDays.setDate(today.getDate() + 30);
-
-    data.inventory?.forEach((product: any) => {
-      const currentStock = product.currentStock || 0;
-      totalUnits += currentStock;
-
-      const prodRaw = rawProducts.find((p: any) => p.sku === product.sku);
-      const lotRaw = rawLots.find((l: any) => l.productId === product.id || l.sku === product.sku);
-      
-      const expDateStr = product.expirationDate || lotRaw?.expirationDate || prodRaw?.expirationDate;
-      const avgSales = product.averageDailySales || prodRaw?.averageDailySales || 0;
-
-      if (expDateStr) {
-        let expDate = new Date(`${expDateStr}T00:00:00Z`);
-        if (isNaN(expDate.getTime())) expDate = new Date(expDateStr);
-
-        if (!isNaN(expDate.getTime())) {
-          if (expDate < today) {
-            expired += currentStock;
-          } else if (expDate <= thirtyDays) {
-            expiringSoon += currentStock;
-          }
-
-          if (avgSales > 0 && expDate >= today) {
-            const daysToSell = currentStock / avgSales;
-            const daysToExpire = (expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24);
-            if (daysToSell > daysToExpire) {
-              risk += currentStock;
-            }
-          }
-        }
-      }
-    });
-
-    return { totalUnits, expiringSoon, expired, risk, totalProducts: data.inventory?.length || 0 };
-  }, [data, rawProducts, rawLots]);
-
-  const filteredInventory = useMemo(() => {
-    if (!data?.inventory) return []
-    const query = search.trim().toLowerCase()
-    const today = new Date(todayIso());
-    const thirtyDays = new Date(today);
-    thirtyDays.setDate(today.getDate() + 30);
-
-    return data.inventory.filter((product: any) => {
-      const matchesSearch = !query || product.name.toLowerCase().includes(query) || String(product.sku).toLowerCase().includes(query)
-      if (!matchesSearch) return false
-
-      if (filterMode === 'all') return true
-
-      const prodRaw = rawProducts.find((p: any) => p.sku === product.sku);
-      const lotRaw = rawLots.find((l: any) => l.productId === product.id || l.sku === product.sku);
-      
-      const expDateStr = product.expirationDate || lotRaw?.expirationDate || prodRaw?.expirationDate;
-      const avgSales = product.averageDailySales || prodRaw?.averageDailySales || 0;
-      const currentStock = product.currentStock || 0;
-
-      if (!expDateStr) return false
-      
-      let expDate = new Date(`${expDateStr}T00:00:00Z`);
-      if (isNaN(expDate.getTime())) expDate = new Date(expDateStr);
-      if (isNaN(expDate.getTime())) return false;
-
-      if (filterMode === 'expired') return expDate < today
-      if (filterMode === 'expiringSoon') return expDate >= today && expDate <= thirtyDays
-      
-      if (filterMode === 'risk') {
-        if (avgSales <= 0 || expDate < today) return false
-        const daysToSell = currentStock / avgSales;
-        const daysToExpire = (expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24);
-        return daysToSell > daysToExpire
-      }
-
-      return true
-    })
-  }, [data, search, filterMode, rawProducts, rawLots])
+    return raw.filter((lot: any) => 
+      lot.sku.toLowerCase().includes(query) || 
+      lot.name.toLowerCase().includes(query) || 
+      (lot.reference && lot.reference.toLowerCase().includes(query)) ||
+      (lot.receivedDate && lot.receivedDate.includes(query)) ||
+      (lot.createdAt && lot.createdAt.includes(query))
+    );
+  }, [rawLots, rawProducts, search])
 
   async function runMutation(task: () => Promise<unknown>, successText: string) {
     setMessage(null)
@@ -216,7 +246,7 @@ function InventoryDashboard() {
       <header className="topbar">
         <a className="brand" href="#top">
           <span className="brand-mark"><Boxes size={20} /></span>
-          <span><strong>Stock al Día</strong><small>Control por vencimiento</small></span>
+          <span><strong>Stock al Día</strong><small>Control por vencimiento (FEFO)</small></span>
         </a>
         <div className="topbar-status">
           <span className="live-dot" />
@@ -243,14 +273,16 @@ function InventoryDashboard() {
           <div className="main-column">
             <section className="panel inventory-panel">
               <div className="panel-heading">
-                
-                {/* NUEVAS PESTAÑAS DE VISTA */}
                 <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                   <button 
                     onClick={() => setViewTab('inventory')} 
                     style={{ background: 'none', border: 'none', fontSize: '20px', fontWeight: viewTab === 'inventory' ? 700 : 400, color: viewTab === 'inventory' ? '#111' : '#666', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
                   >
-                    <ListFilter size={20} /> Inventario
+                    <ListFilter size={20} /> 
+                    {filterMode === 'all' && 'Inventario'}
+                    {filterMode === 'expiringSoon' && 'Próximos a vencer'}
+                    {filterMode === 'risk' && 'Riesgo de merma'}
+                    {filterMode === 'expired' && 'Vencidos'}
                   </button>
                   <button 
                     onClick={() => setViewTab('history')} 
@@ -263,7 +295,7 @@ function InventoryDashboard() {
                 <div className="inventory-tools" style={{ display: 'flex', gap: '8px' }}>
                   <label className="search-box">
                     <Search size={17} />
-                    <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar SKU o producto" />
+                    <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar SKU, Nombre o Fecha..." />
                   </label>
                   <button onClick={handleClearAll} style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', padding: '0 12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}>
                     <Trash2 size={15} /> Vaciar Todo
@@ -274,52 +306,36 @@ function InventoryDashboard() {
               {loading ? (
                 <div style={{ padding: '32px', textAlign: 'center', color: '#666' }}>Cargando datos...</div>
               ) : viewTab === 'inventory' ? (
-                /* VISTA INVENTARIO */
-                filteredInventory.length > 0 ? (
+                finalInventory.length > 0 ? (
                   <div className="inventory-list">
-                    {filteredInventory.map((product: any) => {
-                      const prodRaw = rawProducts.find((p: any) => p.sku === product.sku)
-                      const lotRaw = rawLots.find((l: any) => l.productId === product.id || l.sku === product.sku)
-                      
-                      const expDate = product.expirationDate 
-                                  || product.nextExpirationDate 
-                                  || (product.lots && product.lots.length > 0 ? product.lots[0].expirationDate : null)
-                                  || lotRaw?.expirationDate 
-                                  || prodRaw?.expirationDate 
-                                  || null
-                                  
-                      const avgSales = product.averageDailySales || prodRaw?.averageDailySales || 0
-
-                      return (
-                        <article className="product-row" key={product.id || product.sku}>
-                          <div className="product-identity">
-                            <span className="sku-tag">{product.sku}</span>
-                            <div>
-                              <h3>{product.name}</h3>
-                              <p>
-                                Venta prom: {avgSales}/día 
-                                <span style={{ marginLeft: '12px', color: '#b91c1c', fontWeight: 500 }}>
-                                  🗓️ Vence: {expDate ? formatDate(expDate) : 'Sin fecha'}
-                                </span>
-                              </p>
-                            </div>
+                    {finalInventory.map((product: any) => (
+                      <article className="product-row" key={product.id || product.sku}>
+                        <div className="product-identity">
+                          <span className="sku-tag">{product.sku}</span>
+                          <div>
+                            <h3>{product.name}</h3>
+                            <p>
+                              Venta prom: {product.avgSales}/día 
+                              <span style={{ marginLeft: '12px', color: product.isExpired ? '#dc2626' : (product.isExpiringSoon ? '#d97706' : '#059669'), fontWeight: 600 }}>
+                                🗓️ Activo: {product.activeExpDate ? formatDate(product.activeExpDate) : 'Sin fecha'}
+                              </span>
+                            </p>
                           </div>
-                          <div className="stock-number">
-                            <strong>{numberFormatter.format(product.currentStock || 0)}</strong>
-                            <span>{product.unit || 'unid'}</span>
-                          </div>
-                        </article>
-                      )
-                    })}
+                        </div>
+                        <div className="stock-number">
+                          <strong>{numberFormatter.format(product.currentStock || 0)}</strong>
+                          <span>{product.unit || 'unid'}</span>
+                        </div>
+                      </article>
+                    ))}
                   </div>
                 ) : (
                   <div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}>
                     <h3>No hay resultados</h3>
-                    <p>No se encontraron productos para esta vista.</p>
+                    <p>No se encontraron productos para esta búsqueda o filtro.</p>
                   </div>
                 )
               ) : (
-                /* VISTA HISTORIAL DE MOVIMIENTOS */
                 <div className="inventory-list">
                   {historyData.length > 0 ? (
                     historyData.map((lot: any, idx: number) => (
@@ -345,8 +361,8 @@ function InventoryDashboard() {
                     ))
                   ) : (
                     <div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}>
-                      <h3>Historial limpio</h3>
-                      <p>Todavía no hay boletas ni cargas registradas.</p>
+                      <h3>Historial vacío</h3>
+                      <p>No hay boletas ni cargas masivas que coincidan con la búsqueda.</p>
                     </div>
                   )}
                 </div>
@@ -408,15 +424,35 @@ function InventoryDashboard() {
                 onSubmit={(payload: any) => runMutation(() => saveDailySnapshot(payload), 'Conteo diario guardado.')}
                 onBatchUpdate={async (items: any[]) => {
                   const rawProds = JSON.parse(localStorage.getItem('stock_products') || '[]')
+                  const rawL = JSON.parse(localStorage.getItem('stock_lots') || '[]')
+                  
                   items.forEach(item => {
                     const prodIndex = rawProds.findIndex((p: any) => p.sku.toLowerCase() === item.sku.toLowerCase())
                     if (prodIndex >= 0) {
-                      rawProds[prodIndex].quantity = item.realQuantity
+                      const prod = rawProds[prodIndex];
+                      // Asegurar que el stock inicial nunca se pierda
+                      const initialQty = prod.initialQuantity !== undefined ? prod.initialQuantity : (prod.quantity || 0);
+                      const pLots = rawL.filter((l:any) => l.productId === prod.id || l.sku === prod.sku);
+                      const totalIn = initialQty + pLots.reduce((s:number, l:any) => s + (l.quantity || 0), 0);
+                      
+                      const newTotalOut = totalIn - item.realQuantity;
+                      
+                      if (newTotalOut < 0) {
+                        // Si encontraste MÁS stock del que alguna vez ingresaste
+                        rawProds[prodIndex].initialQuantity = initialQty + Math.abs(newTotalOut);
+                        rawProds[prodIndex].totalOut = 0;
+                      } else {
+                        // Guardamos cuánto se vendió/consumió para que el FEFO queme los lotes viejos
+                        rawProds[prodIndex].totalOut = newTotalOut;
+                        if (prod.initialQuantity === undefined) {
+                          rawProds[prodIndex].initialQuantity = initialQty;
+                        }
+                      }
                     }
                   })
                   localStorage.setItem('stock_products', JSON.stringify(rawProds))
                   await loadData()
-                  setMessage({ type: 'success', text: `Stock ajustado para ${items.length} productos.` })
+                  setMessage({ type: 'success', text: `Stock ajustado (FEFO actualizado) para ${items.length} productos.` })
                 }}
               />
             )}
@@ -456,6 +492,7 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const form = new FormData(e.currentTarget)
+    const qty = Number(form.get('quantity'))
     await onSubmit({
       id: crypto.randomUUID(),
       sku: String(form.get('sku')),
@@ -463,7 +500,8 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
       unit: String(form.get('unit')),
       minimumStock: Number(form.get('minimumStock')),
       averageDailySales: Number(form.get('averageDailySales')),
-      quantity: Number(form.get('quantity')),
+      quantity: qty,
+      initialQuantity: qty,
       expirationDate: String(form.get('expirationDate')),
       receivedDate: todayIso(),
     })
@@ -512,6 +550,7 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
           sku,
           name,
           quantity,
+          initialQuantity: quantity,
           expirationDate,
           minimumStock: 0,
           averageDailySales: avgDailySales,
