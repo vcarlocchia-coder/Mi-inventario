@@ -1,140 +1,114 @@
+"use server";
+
+import { sql } from '@vercel/postgres';
+
 export async function getInventoryDashboard() {
   try {
-    const rawProducts = localStorage.getItem('stock_products')
-    const rawLots = localStorage.getItem('stock_lots')
-    const rawSnapshots = localStorage.getItem('stock_snapshots')
+    const { rows: products } = await sql`SELECT * FROM products`;
+    const { rows: lots } = await sql`SELECT * FROM lots`;
+    const { rows: snapshots } = await sql`SELECT * FROM snapshots ORDER BY created_at DESC LIMIT 50`;
 
-    const products = rawProducts ? JSON.parse(rawProducts) : []
-    const lots = rawLots ? JSON.parse(rawLots) : []
-    const snapshots = rawSnapshots ? JSON.parse(rawSnapshots) : []
+    // Formateamos los datos para que tu pantalla Frontend (FEFO) los entienda igual que antes
+    const rawProducts = products.map(p => ({
+      id: p.id,
+      sku: p.sku,
+      name: p.name,
+      unit: p.unit,
+      minimumStock: Number(p.minimum_stock),
+      averageDailySales: Number(p.average_daily_sales),
+      initialQuantity: Number(p.initial_quantity),
+      totalOut: Number(p.total_out)
+    }));
 
-    const today = new Date().toISOString().slice(0, 10)
-
-    const inventory = products.map((product: any) => {
-      const productLots = lots.filter((lot: any) => lot.productId === product.id)
-      const currentStock = productLots.reduce((acc: number, l: any) => acc + (Number(l.quantity) || 0), 0)
-
-      const activeLots = productLots.map((lot: any) => {
-        const expirationMs = Date.parse(`${lot.expirationDate}T00:00:00Z`)
-        const todayMs = Date.parse(`${today}T00:00:00Z`)
-        const daysToExpire = Math.ceil((expirationMs - todayMs) / 86400000)
-
-        return {
-          id: lot.id,
-          sourceType: lot.sourceType,
-          sourceReference: lot.sourceReference,
-          receivedDate: lot.receivedDate,
-          expirationDate: lot.expirationDate,
-          remainingQuantity: Number(lot.quantity) || 0,
-          daysToExpire,
-          willExpireBeforeSale: false,
-        }
-      })
-
-      return {
-        ...product,
-        currentStock,
-        latestSnapshotDate: null,
-        activeLots,
-      }
-    })
-
-    const totalUnits = inventory.reduce((acc: number, p: any) => acc + p.currentStock, 0)
+    const rawLots = lots.map(l => ({
+      id: l.id,
+      productId: l.product_id,
+      sku: l.sku,
+      sourceType: l.source_type,
+      reference: l.source_reference,
+      quantity: Number(l.quantity),
+      expirationDate: l.expiration_date ? new Date(l.expiration_date).toISOString().slice(0, 10) : '',
+      receivedDate: l.received_date ? new Date(l.received_date).toISOString().slice(0, 10) : ''
+    }));
 
     return {
-      inventory,
+      inventory: [], // La pantalla principal ya hace el cálculo dinámico FEFO
+      rawProducts,
+      rawLots,
       recentSnapshots: snapshots,
-      summary: {
-        totalProducts: inventory.length,
-        totalUnits,
-        lowStockProducts: inventory.filter((p: any) => p.currentStock <= p.minimumStock).length,
-        expiringSoonUnits: 0,
-        expiredUnits: 0,
-        riskUnits: 0,
-      },
-    }
+      summary: { totalProducts: rawProducts.length, totalUnits: 0, lowStockProducts: 0, expiringSoonUnits: 0, expiredUnits: 0, riskUnits: 0 },
+    };
   } catch (error) {
-    console.error('Error al cargar datos:', error)
-    return {
-      inventory: [],
-      recentSnapshots: [],
-      summary: { totalProducts: 0, totalUnits: 0, lowStockProducts: 0, expiringSoonUnits: 0, expiredUnits: 0, riskUnits: 0 },
-    }
+    console.error('Error al cargar datos desde Neon:', error);
+    return { inventory: [], rawProducts: [], rawLots: [], recentSnapshots: [], summary: {} };
   }
 }
 
 export async function createInitialStock(payload: any) {
-  const rawProducts = localStorage.getItem('stock_products')
-  const rawLots = localStorage.getItem('stock_lots')
+  const skuUpper = payload.sku.toUpperCase();
 
-  const products = rawProducts ? JSON.parse(rawProducts) : []
-  const lots = rawLots ? JSON.parse(rawLots) : []
-
-  const skuUpper = payload.sku.toUpperCase()
-  if (products.some((p: any) => p.sku === skuUpper)) {
-    throw new Error('El SKU ya existe. Usa "Cargar boleta" para sumar mercadería.')
+  // Verificamos si el producto ya existe en la nube
+  const { rows } = await sql`SELECT id FROM products WHERE sku = ${skuUpper}`;
+  if (rows.length > 0) {
+    throw new Error('El SKU ya existe. Usa "Cargar boleta" para sumar mercadería.');
   }
 
-  const newProduct = {
-    id: Date.now(),
-    sku: skuUpper,
-    name: payload.name,
-    unit: payload.unit || 'unidades',
-    minimumStock: Number(payload.minimumStock) || 0,
-    averageDailySales: Number(payload.averageDailySales) || 0,
-  }
+  const productId = payload.id || crypto.randomUUID();
+  const lotId = crypto.randomUUID();
+  const expDate = payload.expirationDate ? payload.expirationDate : null;
 
-  const newLot = {
-    id: Date.now() + 1,
-    productId: newProduct.id,
-    sourceType: 'initial',
-    sourceReference: 'Stock inicial',
-    quantity: Number(payload.quantity) || 1,
-    expirationDate: payload.expirationDate,
-    receivedDate: payload.receivedDate || new Date().toISOString().slice(0, 10),
-  }
+  await sql`
+    INSERT INTO products (id, sku, name, unit, minimum_stock, average_daily_sales, initial_quantity, total_out)
+    VALUES (${productId}, ${skuUpper}, ${payload.name}, ${payload.unit || 'unidades'}, ${Number(payload.minimumStock) || 0}, ${Number(payload.averageDailySales) || 0}, ${Number(payload.quantity) || 0}, 0)
+  `;
 
-  products.push(newProduct)
-  lots.push(newLot)
+  await sql`
+    INSERT INTO lots (id, product_id, sku, source_type, source_reference, quantity, expiration_date, received_date)
+    VALUES (${lotId}, ${productId}, ${skuUpper}, 'initial', 'Stock inicial', ${Number(payload.quantity) || 0}, ${expDate}, ${payload.receivedDate || new Date().toISOString().slice(0, 10)})
+  `;
 
-  localStorage.setItem('stock_products', JSON.stringify(products))
-  localStorage.setItem('stock_lots', JSON.stringify(lots))
-
-  return newProduct
+  return { id: productId, sku: skuUpper };
 }
 
 export async function addReceipt(payload: any) {
-  const rawLots = localStorage.getItem('stock_lots')
-  const lots = rawLots ? JSON.parse(rawLots) : []
+  const lotId = crypto.randomUUID();
+  const expDate = payload.expirationDate ? payload.expirationDate : null;
 
-  const newLot = {
-    id: Date.now(),
-    productId: payload.productId,
-    sourceType: 'receipt',
-    sourceReference: payload.reference,
-    quantity: Number(payload.quantity) || 1,
-    expirationDate: payload.expirationDate,
-    receivedDate: payload.receivedDate || new Date().toISOString().slice(0, 10),
-  }
+  await sql`
+    INSERT INTO lots (id, product_id, source_type, source_reference, quantity, expiration_date, received_date)
+    VALUES (${lotId}, ${payload.productId}, 'receipt', ${payload.reference}, ${Number(payload.quantity) || 1}, ${expDate}, ${payload.receivedDate || new Date().toISOString().slice(0, 10)})
+  `;
 
-  lots.push(newLot)
-  localStorage.setItem('stock_lots', JSON.stringify(lots))
-
-  return newLot
+  return { id: lotId };
 }
 
 export async function saveDailySnapshot(payload: any) {
-  const rawSnapshots = localStorage.getItem('stock_snapshots')
-  const snapshots = rawSnapshots ? JSON.parse(rawSnapshots) : []
+  const snapId = crypto.randomUUID();
 
-  const newSnapshot = {
-    id: Date.now(),
-    snapshotDate: payload.snapshotDate,
-    notes: payload.notes || '',
+  await sql`
+    INSERT INTO snapshots (id, snapshot_date, notes)
+    VALUES (${snapId}, ${payload.snapshotDate}, ${payload.notes || ''})
+  `;
+
+  return { id: snapId };
+}
+
+// NUEVA FUNCIÓN: Para guardar los ajustes de stock (FEFO) en Neon
+export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
+  // Actualizamos el consumo/ventas de cada producto
+  for (const prod of productsToUpdate) {
+    await sql`
+      UPDATE products 
+      SET total_out = ${prod.totalOut}, initial_quantity = ${prod.initialQuantity} 
+      WHERE id = ${prod.id}
+    `;
   }
-
-  snapshots.unshift(newSnapshot)
-  localStorage.setItem('stock_snapshots', JSON.stringify(snapshots))
-
-  return newSnapshot
+  
+  // Insertamos los "Ajustes-Sobrantes" si se contaron unidades de más
+  for (const lot of newLots) {
+    await sql`
+      INSERT INTO lots (id, product_id, sku, source_type, source_reference, quantity, expiration_date, received_date)
+      VALUES (${lot.id}, ${lot.productId}, ${lot.sku}, 'adjustment', ${lot.reference}, ${lot.quantity}, NULL, ${lot.receivedDate})
+    `;
+  }
 }
