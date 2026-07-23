@@ -112,7 +112,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       
       const totalIn = batches.reduce((s, b) => s + b.qty, 0);
       let totalOut = prodRaw.totalOut || 0;
-      if (totalOut < 0) totalOut = 0; if (totalOut > totalIn) totalOut = totalIn;
+      if (totalOut < 0) totalOut = 0;
       
       const currentStock = totalIn - totalOut;
       let activeExpDate = null; let burned = totalOut;
@@ -296,8 +296,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                     setIsSubmitting(true); setMessage(null);
                     try {
                       const newLots: any[] = [];
-                      const productsToUpdate: any[] = [];
-
                       items.forEach(item => {
                         const prod = (data.rawProducts || []).find((p: any) => String(p.sku).toLowerCase() === item.sku.toLowerCase());
                         if (prod) {
@@ -305,14 +303,14 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                             id: crypto.randomUUID(),
                             productId: prod.id,
                             sku: prod.sku,
-                            quantity: item.realQuantity, // Valor final deseado
+                            quantity: item.realQuantity,
                             reference: 'CONTEO-REAL',
                             receivedDate: todayIso()
                           });
                         }
                       });
 
-                      await syncAdjustments(productsToUpdate, newLots);
+                      await syncAdjustments([], newLots);
                       await loadData();
                       setMessage({ type: 'success', text: `Stock pisado y ajustado para ${items.length} productos.` });
                     } catch (error: any) {
