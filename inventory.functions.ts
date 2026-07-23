@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 
-const NEON_URL = "TU_URL_DE_NEON_AQUI"; // Mantené tu URL con tu clave válida
+const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Mantené tu URL con tu clave válida
 
 function getSql() {
   const connectionString = 
