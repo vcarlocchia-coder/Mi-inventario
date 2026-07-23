@@ -1,3 +1,4 @@
+
 import { createFileRoute } from '@tanstack/react-router'
 import {
   AlertTriangle, Boxes, CalendarClock, ClipboardPaste, FilePlus2, PackageOpen,
@@ -291,19 +292,20 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
               )}
 
               {actionMode === 'snapshot' && (
-                <SnapshotForm data={data} disabled={isSubmitting} onSubmit={(payload: any) => runMutation(() => saveDailySnapshot(payload), 'Conteo guardado.')}
+                <SnapshotForm data={data} enrichedInventory={enrichedInventory} disabled={isSubmitting} onSubmit={(payload: any) => runMutation(() => saveDailySnapshot(payload), 'Conteo guardado.')}
                   onBatchUpdate={async (items: any[]) => {
                     setIsSubmitting(true); setMessage(null);
                     try {
                       const newLots: any[] = [];
                       items.forEach(item => {
-                        const prod = (data.rawProducts || []).find((p: any) => String(p.sku).toLowerCase() === item.sku.toLowerCase());
+                        const prod = enrichedInventory.find((p: any) => String(p.sku).toLowerCase() === item.sku.toLowerCase());
                         if (prod) {
                           newLots.push({
                             id: crypto.randomUUID(),
                             productId: prod.id,
                             sku: prod.sku,
                             quantity: item.realQuantity,
+                            expirationDate: item.expirationDate || prod.activeExpDate || null,
                             reference: 'CONTEO-REAL',
                             receivedDate: todayIso()
                           });
@@ -312,9 +314,9 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
 
                       await syncAdjustments([], newLots);
                       await loadData();
-                      setMessage({ type: 'success', text: `Stock pisado y ajustado para ${items.length} productos.` });
+                      setMessage({ type: 'success', text: `Stock ajustado para ${items.length} productos.` });
                     } catch (error: any) {
-                      setMessage({ type: 'error', text: error.message || 'Error al pisar stock en la nube.' });
+                      setMessage({ type: 'error', text: error.message || 'Error al ajustar stock.' });
                     } finally { setIsSubmitting(false); }
                   }} />
               )}
@@ -396,12 +398,26 @@ function ReceiptForm({ data, disabled, onSubmit, onBatchSubmit }: any) {
   )
 }
 
-function SnapshotForm({ disabled, onSubmit, onBatchUpdate }: any) {
+function SnapshotForm({ disabled, onSubmit, onBatchUpdate, enrichedInventory }: any) {
   const [isExcel, setIsExcel] = useState(false); const [excelText, setExcelText] = useState(''); const [notes, setNotes] = useState('');
   async function handleSubmit(e: FormEvent<HTMLFormElement>) { e.preventDefault(); await onSubmit({ snapshotDate: todayIso(), notes }); setNotes(''); }
   async function handleBatch() {
     const lines = excelText.split(/\r?\n/).map(l => l.trim()).filter(Boolean); const items = [];
-    for (const line of lines) { const parts = line.split('\t').map(p => p.trim()); if (parts.length >= 2) items.push({ sku: parts[0], realQuantity: parseFloat(parts[1].trim().replace(',', '.')) || 0 }); }
+    for (const line of lines) { 
+      const parts = line.split('\t').map(p => p.trim()); 
+      if (parts.length >= 2) {
+        let expDate = parts[2] || '';
+        if (expDate && expDate.includes('/')) { 
+          const dp = expDate.split('/'); 
+          if (dp.length === 3) expDate = `${dp[2].length === 2 ? '20'+dp[2] : dp[2]}-${dp[1].padStart(2, '0')}-${dp[0].padStart(2, '0')}`; 
+        }
+        items.push({ 
+          sku: parts[0], 
+          realQuantity: parseFloat(parts[1].trim().replace(',', '.')) || 0,
+          expirationDate: expDate
+        }); 
+      }
+    }
     if (items.length === 0) return alert('Faltan datos.');
     if (confirm(`¿Actualizar el stock de estos ${items.length} productos?`)) { await onBatchUpdate(items); setExcelText(''); }
   }
@@ -409,7 +425,7 @@ function SnapshotForm({ disabled, onSubmit, onBatchUpdate }: any) {
     <div className="action-form">
       <h2>Ajuste de Stock</h2>
       <div style={{ display: 'flex', gap: '8px', margin: '12px 0' }}><button type="button" className={`mini-action ${!isExcel ? 'active' : ''}`} onClick={() => setIsExcel(false)}>Nota</button><button type="button" className={`mini-action ${isExcel ? 'active' : ''}`} onClick={() => setIsExcel(true)}><Table size={14} /> Excel</button></div>
-      {isExcel ? (<div><textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej: HAR-01  120" /><button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Pisar Stock</button></div>) : (<form onSubmit={(e) => void handleSubmit(e)}><label className="field"><span>Obs.</span><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} /></label><button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>Guardar</button></form>)}
+      {isExcel ? (<div><textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej: HAR-01  120  (Opcional: 2026-12-01)" /><button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Pisar Stock</button></div>) : (<form onSubmit={(e) => void handleSubmit(e)}><label className="field"><span>Obs.</span><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} /></label><button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>Guardar</button></form>)}
     </div>
   )
 }
