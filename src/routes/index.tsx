@@ -267,8 +267,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                   onBatchSubmit={async (items: any[]) => {
                     setIsSubmitting(true); setMessage(null);
                     try {
-                      localStorage.setItem('stock_products', JSON.stringify([]))
-                      localStorage.setItem('stock_lots', JSON.stringify([]))
                       for (const item of items) { await createInitialStock(item); }
                       await loadData(); 
                       setMessage({ type: 'success', text: `${items.length} productos cargados.` })
@@ -297,36 +295,29 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                   onBatchUpdate={async (items: any[]) => {
                     setIsSubmitting(true); setMessage(null);
                     try {
-                      const rawProds = JSON.parse(localStorage.getItem('stock_products') || '[]')
-                      const rawL = JSON.parse(localStorage.getItem('stock_lots') || '[]')
-                      let lotsChanged = false;
-                      
+                      const newLots: any[] = [];
+                      const productsToUpdate: any[] = [];
+
                       items.forEach(item => {
-                        const prodIndex = rawProds.findIndex((p: any) => p.sku.toLowerCase() === item.sku.toLowerCase())
-                        if (prodIndex >= 0) {
-                          const prod = rawProds[prodIndex];
-                          const initialQty = prod.initialQuantity !== undefined ? prod.initialQuantity : (prod.quantity || 0);
-                          const pLots = rawL.filter((l:any) => l.productId === prod.id || l.sku === prod.sku);
-                          const totalIn = initialQty + pLots.reduce((s:number, l:any) => s + (l.quantity || 0), 0);
-                          const newTotalOut = totalIn - item.realQuantity;
-                          
-                          if (newTotalOut < 0) {
-                            rawL.push({ id: crypto.randomUUID(), productId: prod.id, sku: prod.sku, reference: 'AJUSTE-SOBRANTE', quantity: Math.abs(newTotalOut), expirationDate: '', receivedDate: todayIso() });
-                            lotsChanged = true;
-                            rawProds[prodIndex].totalOut = 0;
-                          } else {
-                            rawProds[prodIndex].totalOut = newTotalOut;
-                          }
-                          if (prod.initialQuantity === undefined) rawProds[prodIndex].initialQuantity = initialQty;
+                        const prod = (data.rawProducts || []).find((p: any) => String(p.sku).toLowerCase() === item.sku.toLowerCase());
+                        if (prod) {
+                          newLots.push({
+                            id: crypto.randomUUID(),
+                            productId: prod.id,
+                            sku: prod.sku,
+                            quantity: item.realQuantity, // Valor final deseado
+                            reference: 'CONTEO-REAL',
+                            receivedDate: todayIso()
+                          });
                         }
-                      })
-                      localStorage.setItem('stock_products', JSON.stringify(rawProds))
-                      if (lotsChanged) localStorage.setItem('stock_lots', JSON.stringify(rawL))
-                      await loadData()
-                      setMessage({ type: 'success', text: `Stock ajustado (FEFO) para ${items.length} productos.` })
+                      });
+
+                      await syncAdjustments(productsToUpdate, newLots);
+                      await loadData();
+                      setMessage({ type: 'success', text: `Stock pisado y ajustado para ${items.length} productos.` });
                     } catch (error: any) {
-                      setMessage({ type: 'error', text: error.message || 'Error al ajustar stock.' })
-                    } finally { setIsSubmitting(false) }
+                      setMessage({ type: 'error', text: error.message || 'Error al pisar stock en la nube.' });
+                    } finally { setIsSubmitting(false); }
                   }} />
               )}
             </aside>
