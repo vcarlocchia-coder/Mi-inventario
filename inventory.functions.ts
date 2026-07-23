@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 
-const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Mantené tu URL con tu clave válida
+const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Tu URL de Neon con clave activa
 
 function getSql() {
   const connectionString = 
@@ -107,32 +107,33 @@ export async function saveDailySnapshot(payload: any) {
 export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
   const sql = getSql();
 
-  for (const prod of productsToUpdate) {
-    // Si el ajuste indica actualizar la salida acumulada
-    await sql`
-      UPDATE products 
-      SET total_out = ${parseQuantity(prod.totalOut)}
-      WHERE id = ${String(prod.id)}
-    `;
-  }
-
   for (const lot of newLots) {
-    const qty = parseQuantity(lot.quantity);
-    
-    // Si el ajuste viene como un valor negativo o diferencia
-    await sql`
-      INSERT INTO lots (id, product_id, sku, source_type, source_reference, quantity, expiration_date, received_date)
-      VALUES (
-        ${String(lot.id)}, 
-        ${String(lot.productId)}, 
-        ${lot.sku}, 
-        'adjustment', 
-        ${lot.reference || 'Ajuste de Conteo'}, 
-        ${qty}, 
-        NULL, 
-        ${lot.receivedDate || new Date().toISOString().slice(0, 10)}
-      )
-    `;
+    const pId = String(lot.productId);
+    const countedQuantity = parseQuantity(lot.quantity); // Lo que ingresaste en la pantalla de conteo
+
+    // 1. Obtenemos todo lo cargado hasta ahora para este producto
+    const currentLots = await sql`SELECT quantity FROM lots WHERE product_id = ${pId}`;
+    const currentTotal = currentLots.reduce((acc: number, l: any) => acc + parseQuantity(l.quantity), 0);
+
+    // 2. Calculamos la diferencia exacta para llegar al número que contaste
+    const difference = countedQuantity - currentTotal;
+
+    // 3. Solo guardamos un lote de ajuste si realmente hay una diferencia
+    if (difference !== 0) {
+      await sql`
+        INSERT INTO lots (id, product_id, sku, source_type, source_reference, quantity, expiration_date, received_date)
+        VALUES (
+          ${String(lot.id || crypto.randomUUID())}, 
+          ${pId}, 
+          ${lot.sku || ''}, 
+          'adjustment', 
+          ${lot.reference || 'Ajuste de Conteo'}, 
+          ${difference}, 
+          NULL, 
+          ${lot.receivedDate || new Date().toISOString().slice(0, 10)}
+        )
+      `;
+    }
   }
 }
 
