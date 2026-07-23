@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 
-const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Mantené tu URL activa
+const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Tu URL de Neon con clave activa
 
 function getSql() {
   const connectionString = 
@@ -110,26 +110,15 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
   for (const lot of newLots) {
     const pId = String(lot.productId);
     const realQty = parseQuantity(lot.quantity);
+    const expDate = lot.expirationDate || null;
 
-    // 1. Buscamos la última fecha de vencimiento que tenía este producto antes de ajustar
-    const prevLot = await sql`
-      SELECT expiration_date FROM lots 
-      WHERE product_id = ${pId} AND expiration_date IS NOT NULL 
-      ORDER BY expiration_date ASC LIMIT 1
-    `;
-    
-    let preservedExpDate = prevLot.length > 0 ? prevLot[0].expiration_date : null;
-    if (preservedExpDate && typeof preservedExpDate !== 'string') {
-      preservedExpDate = new Date(preservedExpDate).toISOString().slice(0, 10);
-    }
-
-    // 2. Borramos los lotes viejos acumulados
+    // 1. Borramos los lotes viejos acumulados de este producto
     await sql`DELETE FROM lots WHERE product_id = ${pId}`;
 
-    // 3. Reseteamos total_out
+    // 2. Reseteamos total_out
     await sql`UPDATE products SET total_out = 0 WHERE id = ${pId}`;
 
-    // 4. Creamos el lote ajustado CONSERVANDO la fecha de vencimiento original
+    // 3. Creamos el lote ajustado CON la fecha de vencimiento
     await sql`
       INSERT INTO lots (id, product_id, sku, source_type, source_reference, quantity, expiration_date, received_date)
       VALUES (
@@ -139,7 +128,7 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
         'adjustment', 
         'Ajuste por Conteo Real', 
         ${realQty}, 
-        ${preservedExpDate}, 
+        ${expDate}, 
         ${lot.receivedDate || new Date().toISOString().slice(0, 10)}
       )
     `;
