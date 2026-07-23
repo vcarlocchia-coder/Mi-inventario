@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 
-const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Tu URL de Neon con clave activa
+const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Tu URL de Neon activa con contraseña
 
 function getSql() {
   const connectionString = 
@@ -107,18 +107,18 @@ export async function saveDailySnapshot(payload: any) {
 export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
   const sql = getSql();
 
+  // Procesamos cada ajuste enviado por el módulo de Conteo
   for (const lot of newLots) {
     const pId = String(lot.productId);
-    const countedQuantity = parseQuantity(lot.quantity); // Lo que ingresaste en la pantalla de conteo
+    const countedQuantity = parseQuantity(lot.quantity); // Valor contado final
 
-    // 1. Obtenemos todo lo cargado hasta ahora para este producto
-    const currentLots = await sql`SELECT quantity FROM lots WHERE product_id = ${pId}`;
+    // Obtenemos los lotes acumulados
+    const currentLots = await sql`SELECT id, quantity FROM lots WHERE product_id = ${pId}`;
     const currentTotal = currentLots.reduce((acc: number, l: any) => acc + parseQuantity(l.quantity), 0);
 
-    // 2. Calculamos la diferencia exacta para llegar al número que contaste
+    // Calculamos el delta necesario para ajustar la suma total al valor contado
     const difference = countedQuantity - currentTotal;
 
-    // 3. Solo guardamos un lote de ajuste si realmente hay una diferencia
     if (difference !== 0) {
       await sql`
         INSERT INTO lots (id, product_id, sku, source_type, source_reference, quantity, expiration_date, received_date)
@@ -132,6 +132,17 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
           NULL, 
           ${lot.receivedDate || new Date().toISOString().slice(0, 10)}
         )
+      `;
+    }
+  }
+
+  // Actualizamos también los productos si el payload los trae
+  for (const prod of productsToUpdate) {
+    if (prod.totalOut !== undefined) {
+      await sql`
+        UPDATE products 
+        SET total_out = ${parseQuantity(prod.totalOut)}
+        WHERE id = ${String(prod.id)}
       `;
     }
   }
