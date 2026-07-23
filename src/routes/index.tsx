@@ -12,6 +12,8 @@ import {
   Sparkles,
   Table,
   Trash2,
+  History,
+  ListFilter
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
@@ -27,6 +29,7 @@ export const Route = createFileRoute('/')({
 
 type ActionMode = 'initial' | 'receipt' | 'snapshot'
 type FilterMode = 'all' | 'expiringSoon' | 'expired' | 'risk'
+type ViewTab = 'inventory' | 'history'
 
 const dateFormatter = new Intl.DateTimeFormat('es-CL', {
   day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC',
@@ -37,7 +40,6 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10)
 }
 
-// Escudo anti-errores: Si la fecha es basura, devuelve el texto crudo en vez de crashear
 function formatDate(value: string) {
   if (!value) return ''
   try {
@@ -59,6 +61,7 @@ function InventoryDashboard() {
   const [loading, setLoading] = useState(true)
   const [actionMode, setActionMode] = useState<ActionMode>('initial')
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
+  const [viewTab, setViewTab] = useState<ViewTab>('inventory')
   const [search, setSearch] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -96,6 +99,18 @@ function InventoryDashboard() {
     try { return JSON.parse(localStorage.getItem('stock_lots') || '[]') } catch { return [] }
   }, [data])
 
+  // CÁLCULO DE HISTORIAL CRUZANDO LOTES CON PRODUCTOS
+  const historyData = useMemo(() => {
+    return rawLots.map((lot: any) => {
+      const prod = rawProducts.find((p: any) => p.id === lot.productId || p.sku === lot.sku)
+      return {
+        ...lot,
+        sku: prod?.sku || lot.sku || 'Desconocido',
+        name: prod?.name || 'Producto eliminado',
+      }
+    }).reverse() // Reverse para ver los más nuevos arriba
+  }, [rawLots, rawProducts])
+
   const dashboardStats = useMemo(() => {
     let totalUnits = 0;
     let expiringSoon = 0;
@@ -117,7 +132,6 @@ function InventoryDashboard() {
       const avgSales = product.averageDailySales || prodRaw?.averageDailySales || 0;
 
       if (expDateStr) {
-        // Cálculo protegido
         let expDate = new Date(`${expDateStr}T00:00:00Z`);
         if (isNaN(expDate.getTime())) expDate = new Date(expDateStr);
 
@@ -164,18 +178,12 @@ function InventoryDashboard() {
 
       if (!expDateStr) return false
       
-      // Cálculo protegido
       let expDate = new Date(`${expDateStr}T00:00:00Z`);
       if (isNaN(expDate.getTime())) expDate = new Date(expDateStr);
-      if (isNaN(expDate.getTime())) return false; // Ignorar en filtros si la fecha es muy basura
+      if (isNaN(expDate.getTime())) return false;
 
-      if (filterMode === 'expired') {
-        return expDate < today
-      }
-      
-      if (filterMode === 'expiringSoon') {
-        return expDate >= today && expDate <= thirtyDays
-      }
+      if (filterMode === 'expired') return expDate < today
+      if (filterMode === 'expiringSoon') return expDate >= today && expDate <= thirtyDays
       
       if (filterMode === 'risk') {
         if (avgSales <= 0 || expDate < today) return false
@@ -225,25 +233,33 @@ function InventoryDashboard() {
         </section>
 
         <section className="stats-grid">
-          <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(dashboardStats.totalUnits)} detail={`${dashboardStats.totalProducts} productos activos`} tone="ink" onClick={() => setFilterMode('all')} active={filterMode === 'all'} />
-          <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(dashboardStats.expiringSoon)} detail="unidades para priorizar" tone="amber" onClick={() => setFilterMode('expiringSoon')} active={filterMode === 'expiringSoon'} />
-          <StatCard icon={<AlertTriangle />} label="Riesgo de merma" value={numberFormatter.format(dashboardStats.risk)} detail="vencerán antes de venderse" tone="rose" onClick={() => setFilterMode('risk')} active={filterMode === 'risk'} />
-          <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(dashboardStats.expired)} detail="unidades vencidas" tone="green" onClick={() => setFilterMode('expired')} active={filterMode === 'expired'} />
+          <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(dashboardStats.totalUnits)} detail={`${dashboardStats.totalProducts} productos activos`} tone="ink" onClick={() => { setFilterMode('all'); setViewTab('inventory'); }} active={filterMode === 'all' && viewTab === 'inventory'} />
+          <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(dashboardStats.expiringSoon)} detail="unidades para priorizar" tone="amber" onClick={() => { setFilterMode('expiringSoon'); setViewTab('inventory'); }} active={filterMode === 'expiringSoon' && viewTab === 'inventory'} />
+          <StatCard icon={<AlertTriangle />} label="Riesgo de merma" value={numberFormatter.format(dashboardStats.risk)} detail="vencerán antes de venderse" tone="rose" onClick={() => { setFilterMode('risk'); setViewTab('inventory'); }} active={filterMode === 'risk' && viewTab === 'inventory'} />
+          <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(dashboardStats.expired)} detail="unidades vencidas" tone="green" onClick={() => { setFilterMode('expired'); setViewTab('inventory'); }} active={filterMode === 'expired' && viewTab === 'inventory'} />
         </section>
 
         <div className="workspace">
           <div className="main-column">
             <section className="panel inventory-panel">
               <div className="panel-heading">
-                <div>
-                  <span className="section-kicker">Existencias</span>
-                  <h2>
-                    {filterMode === 'all' && 'Inventario completo'}
-                    {filterMode === 'expiringSoon' && 'Próximos a vencer (30 días)'}
-                    {filterMode === 'risk' && 'Riesgo de merma'}
-                    {filterMode === 'expired' && 'Productos vencidos'}
-                  </h2>
+                
+                {/* NUEVAS PESTAÑAS DE VISTA */}
+                <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                  <button 
+                    onClick={() => setViewTab('inventory')} 
+                    style={{ background: 'none', border: 'none', fontSize: '20px', fontWeight: viewTab === 'inventory' ? 700 : 400, color: viewTab === 'inventory' ? '#111' : '#666', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    <ListFilter size={20} /> Inventario
+                  </button>
+                  <button 
+                    onClick={() => setViewTab('history')} 
+                    style={{ background: 'none', border: 'none', fontSize: '20px', fontWeight: viewTab === 'history' ? 700 : 400, color: viewTab === 'history' ? '#111' : '#666', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    <History size={20} /> Historial
+                  </button>
                 </div>
+
                 <div className="inventory-tools" style={{ display: 'flex', gap: '8px' }}>
                   <label className="search-box">
                     <Search size={17} />
@@ -257,47 +273,82 @@ function InventoryDashboard() {
 
               {loading ? (
                 <div style={{ padding: '32px', textAlign: 'center', color: '#666' }}>Cargando datos...</div>
-              ) : filteredInventory.length > 0 ? (
-                <div className="inventory-list">
-                  {filteredInventory.map((product: any) => {
-                    const prodRaw = rawProducts.find((p: any) => p.sku === product.sku)
-                    const lotRaw = rawLots.find((l: any) => l.productId === product.id || l.sku === product.sku)
-                    
-                    const expDate = product.expirationDate 
-                                 || product.nextExpirationDate 
-                                 || (product.lots && product.lots.length > 0 ? product.lots[0].expirationDate : null)
-                                 || lotRaw?.expirationDate 
-                                 || prodRaw?.expirationDate 
-                                 || null
-                                 
-                    const avgSales = product.averageDailySales || prodRaw?.averageDailySales || 0
+              ) : viewTab === 'inventory' ? (
+                /* VISTA INVENTARIO */
+                filteredInventory.length > 0 ? (
+                  <div className="inventory-list">
+                    {filteredInventory.map((product: any) => {
+                      const prodRaw = rawProducts.find((p: any) => p.sku === product.sku)
+                      const lotRaw = rawLots.find((l: any) => l.productId === product.id || l.sku === product.sku)
+                      
+                      const expDate = product.expirationDate 
+                                  || product.nextExpirationDate 
+                                  || (product.lots && product.lots.length > 0 ? product.lots[0].expirationDate : null)
+                                  || lotRaw?.expirationDate 
+                                  || prodRaw?.expirationDate 
+                                  || null
+                                  
+                      const avgSales = product.averageDailySales || prodRaw?.averageDailySales || 0
 
-                    return (
-                      <article className="product-row" key={product.id || product.sku}>
+                      return (
+                        <article className="product-row" key={product.id || product.sku}>
+                          <div className="product-identity">
+                            <span className="sku-tag">{product.sku}</span>
+                            <div>
+                              <h3>{product.name}</h3>
+                              <p>
+                                Venta prom: {avgSales}/día 
+                                <span style={{ marginLeft: '12px', color: '#b91c1c', fontWeight: 500 }}>
+                                  🗓️ Vence: {expDate ? formatDate(expDate) : 'Sin fecha'}
+                                </span>
+                              </p>
+                            </div>
+                          </div>
+                          <div className="stock-number">
+                            <strong>{numberFormatter.format(product.currentStock || 0)}</strong>
+                            <span>{product.unit || 'unid'}</span>
+                          </div>
+                        </article>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}>
+                    <h3>No hay resultados</h3>
+                    <p>No se encontraron productos para esta vista.</p>
+                  </div>
+                )
+              ) : (
+                /* VISTA HISTORIAL DE MOVIMIENTOS */
+                <div className="inventory-list">
+                  {historyData.length > 0 ? (
+                    historyData.map((lot: any, idx: number) => (
+                      <article className="product-row" key={lot.id || idx}>
                         <div className="product-identity">
-                          <span className="sku-tag">{product.sku}</span>
+                          <span className="sku-tag" style={{ background: '#eef2ff', color: '#4f46e5' }}>{lot.sku}</span>
                           <div>
-                            <h3>{product.name}</h3>
-                            <p>
-                              Venta prom: {avgSales}/día 
-                              <span style={{ marginLeft: '12px', color: '#b91c1c', fontWeight: 500 }}>
-                                🗓️ Vence: {expDate ? formatDate(expDate) : 'Sin fecha'}
-                              </span>
+                            <h3>{lot.name}</h3>
+                            <p style={{ color: '#666', fontSize: '13px' }}>
+                              <span style={{ fontWeight: 600, color: '#059669' }}>Ref: {lot.reference}</span>
+                              <span style={{ margin: '0 8px' }}>|</span>
+                              📅 Carga: {formatDate(lot.receivedDate || lot.createdAt || todayIso())}
+                              <span style={{ margin: '0 8px' }}>|</span>
+                              🗓️ Vence: {formatDate(lot.expirationDate)}
                             </p>
                           </div>
                         </div>
                         <div className="stock-number">
-                          <strong>{numberFormatter.format(product.currentStock || 0)}</strong>
-                          <span>{product.unit || 'unid'}</span>
+                          <strong style={{ color: '#059669' }}>+{numberFormatter.format(lot.quantity || 0)}</strong>
+                          <span>unid</span>
                         </div>
                       </article>
-                    )
-                  })}
-                </div>
-              ) : (
-                <div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}>
-                  <h3>No hay resultados</h3>
-                  <p>No se encontraron productos para esta vista.</p>
+                    ))
+                  ) : (
+                    <div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}>
+                      <h3>Historial limpio</h3>
+                      <p>Todavía no hay boletas ni cargas registradas.</p>
+                    </div>
+                  )}
                 </div>
               )}
             </section>
@@ -439,11 +490,9 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
         }
         const quantity = parsedQty || 0
         
-        // Manejo robusto de fechas
         let expirationDate = parts[3];
         if (expirationDate.includes('/')) {
             const dateParts = expirationDate.split('/');
-            // Asumimos formato DD/MM/YYYY o D/M/YYYY
             if (dateParts.length === 3) {
                 const day = dateParts[0].padStart(2, '0');
                 const month = dateParts[1].padStart(2, '0');
