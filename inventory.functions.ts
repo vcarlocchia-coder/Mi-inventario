@@ -10,7 +10,7 @@ import {
 } from './schema'
 
 // Conexión a Neon Database mediante Drizzle
-const sql = neon(process.env.DATABASE_URL || '')
+const sql = neon(import.meta.env.VITE_DATABASE_URL || process.env.DATABASE_URL || '')
 const db = drizzle(sql)
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
