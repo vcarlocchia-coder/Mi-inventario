@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 
-const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Asegurate de conservar tu URL real con contraseña
+const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Tu URL de Neon con tu clave
 
 function getSql() {
   const connectionString = 
@@ -109,24 +109,15 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
 
   for (const lot of newLots) {
     const pId = String(lot.productId);
-    const targetRealQty = parseQuantity(lot.quantity); // La cantidad que ingresaste en la pestaña Conteo
+    const realQty = parseQuantity(lot.quantity); // La cantidad que ingresaste en la pestaña Conteo
 
-    // 1. Buscamos todos los lotes de entradas grabados para este producto
-    const currentLots = await sql`SELECT quantity FROM lots WHERE product_id = ${pId}`;
-    const totalIn = currentLots.reduce((acc: number, l: any) => acc + parseQuantity(l.quantity), 0);
+    // 1. Borramos los lotes viejos para este producto específico
+    await sql`DELETE FROM lots WHERE product_id = ${pId}`;
 
-    // 2. Calculamos las salidas necesarias para que: totalIn - totalOut = targetRealQty
-    let newTotalOut = totalIn - targetRealQty;
-    if (newTotalOut < 0) newTotalOut = 0; // Si el conteo supera las entradas acumuladas
+    // 2. Reseteamos el total_out en la tabla de productos
+    await sql`UPDATE products SET total_out = 0 WHERE id = ${pId}`;
 
-    // 3. Actualizamos total_out en la tabla products
-    await sql`
-      UPDATE products 
-      SET total_out = ${newTotalOut}
-      WHERE id = ${pId}
-    `;
-
-    // 4. Registramos una nota en el historial de lotes como referencia informativa (con cantidad 0 para no distorsionar las entradas sumadas)
+    // 3. Creamos UN solo lote nuevo con la cantidad real exacta
     await sql`
       INSERT INTO lots (id, product_id, sku, source_type, source_reference, quantity, expiration_date, received_date)
       VALUES (
@@ -134,8 +125,8 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
         ${pId}, 
         ${lot.sku || ''}, 
         'adjustment', 
-        ${'CONTEO REAL: ' + targetRealQty}, 
-        0, 
+        'Ajuste por Conteo Real', 
+        ${realQty}, 
         NULL, 
         ${lot.receivedDate || new Date().toISOString().slice(0, 10)}
       )
