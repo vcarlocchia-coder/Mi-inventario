@@ -197,6 +197,8 @@ function InventoryDashboard() {
 
                   for (const item of items) {
                     await createInitialStock(item)
+                    // ESTO EVITA QUE CHOQUEN LOS IDs CUANDO SE GUARDA MUY RÁPIDO
+                    await new Promise(resolve => setTimeout(resolve, 20))
                   }
                   await loadData()
                   setMessage({ type: 'success', text: `${items.length} productos cargados perfectamente desde Excel.` })
@@ -246,6 +248,7 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
     e.preventDefault()
     const form = new FormData(e.currentTarget)
     await onSubmit({
+      id: crypto.randomUUID(),
       sku: String(form.get('sku')),
       name: String(form.get('name')),
       unit: String(form.get('unit')),
@@ -275,6 +278,7 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
         const expirationDate = parts[3]
 
         items.push({
+          id: crypto.randomUUID(), // FORZAMOS UN ID ÚNICO SÍ O SÍ
           sku,
           name,
           quantity,
