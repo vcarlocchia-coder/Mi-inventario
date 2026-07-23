@@ -41,8 +41,9 @@ function InventoryApp() {
 
   const handleLogin = (e: FormEvent) => {
     e.preventDefault()
-    if (pinCode === 'VaneAdmin123') { setRole('admin'); sessionStorage.setItem('app_role', 'admin') }
-    else if (pinCode === 'Equipo2026') { setRole('viewer'); sessionStorage.setItem('app_role', 'viewer') }
+    // NUEVAS CLAVES DE ACCESO
+    if (pinCode === 'Valen2026') { setRole('admin'); sessionStorage.setItem('app_role', 'admin') }
+    else if (pinCode === 'Tolosa2026') { setRole('viewer'); sessionStorage.setItem('app_role', 'viewer') }
     else setError('Clave incorrecta. Intentá de nuevo.')
     setPinCode('')
   }
@@ -61,7 +62,7 @@ function InventoryApp() {
             {error && <span style={{ color: '#ef4444', fontSize: '14px', fontWeight: 500 }}>{error}</span>}
             <button type="submit" style={{ background: '#0f172a', color: 'white', padding: '14px', borderRadius: '8px', border: 'none', fontWeight: 600, fontSize: '16px', cursor: 'pointer' }}>Entrar</button>
           </form>
-          <div style={{ marginTop: '24px', fontSize: '12px', color: '#94a3b8' }}>(Admin: VaneAdmin123 | Lector: Equipo2026)</div>
+          {/* El texto de ayuda fue eliminado por seguridad */}
         </div>
       </main>
     )
