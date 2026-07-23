@@ -197,7 +197,6 @@ function InventoryDashboard() {
 
                   for (const item of items) {
                     await createInitialStock(item)
-                    // ESTO EVITA QUE CHOQUEN LOS IDs CUANDO SE GUARDA MUY RÁPIDO
                     await new Promise(resolve => setTimeout(resolve, 20))
                   }
                   await loadData()
@@ -272,13 +271,23 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
         const sku = parts[0]
         const name = parts[1]
         
-        const rawQty = parts[2].replace(/\./g, '').replace(',', '.')
-        const quantity = parseFloat(rawQty) || 0
+        // --- LÓGICA INTELIGENTE DE DECIMALES ---
+        const rawQty = parts[2].trim()
+        let parsedQty = 0
+        if (rawQty.includes(',') && rawQty.includes('.')) {
+          // Si tiene punto de miles y coma decimal (ej: 1.000,50)
+          parsedQty = parseFloat(rawQty.replace(/\./g, '').replace(',', '.'))
+        } else {
+          // Si solo tiene coma (68,75) o solo tiene punto (68.75)
+          parsedQty = parseFloat(rawQty.replace(',', '.'))
+        }
+        const quantity = parsedQty || 0
+        // ---------------------------------------
         
         const expirationDate = parts[3]
 
         items.push({
-          id: crypto.randomUUID(), // FORZAMOS UN ID ÚNICO SÍ O SÍ
+          id: crypto.randomUUID(),
           sku,
           name,
           quantity,
