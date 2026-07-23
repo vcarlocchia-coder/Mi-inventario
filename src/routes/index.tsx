@@ -12,6 +12,7 @@ import {
   Sparkles,
   Table,
   Trash2,
+  Filter,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
@@ -26,6 +27,7 @@ export const Route = createFileRoute('/')({
 })
 
 type ActionMode = 'initial' | 'receipt' | 'snapshot'
+type FilterMode = 'all' | 'expiringSoon' | 'expired' | 'risk'
 
 const dateFormatter = new Intl.DateTimeFormat('es-CL', {
   day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC',
@@ -49,6 +51,7 @@ function InventoryDashboard() {
   })
   const [loading, setLoading] = useState(true)
   const [actionMode, setActionMode] = useState<ActionMode>('initial')
+  const [filterMode, setFilterMode] = useState<FilterMode>('all')
   const [search, setSearch] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -86,15 +89,6 @@ function InventoryDashboard() {
     try { return JSON.parse(localStorage.getItem('stock_lots') || '[]') } catch { return [] }
   }, [data])
 
-  const filteredInventory = useMemo(() => {
-    if (!data?.inventory) return []
-    const query = search.trim().toLowerCase()
-    return data.inventory.filter((product: any) => {
-      return !query || product.name.toLowerCase().includes(query) || String(product.sku).toLowerCase().includes(query)
-    })
-  }, [data, search])
-
-  // CÁLCULO DINÁMICO PARA LOS MÓDULOS DE ARRIBA
   const dashboardStats = useMemo(() => {
     let totalUnits = 0;
     let expiringSoon = 0;
@@ -136,6 +130,48 @@ function InventoryDashboard() {
     return { totalUnits, expiringSoon, expired, risk, totalProducts: data.inventory?.length || 0 };
   }, [data, rawProducts, rawLots]);
 
+  const filteredInventory = useMemo(() => {
+    if (!data?.inventory) return []
+    const query = search.trim().toLowerCase()
+    const today = new Date(todayIso());
+    const thirtyDays = new Date(today);
+    thirtyDays.setDate(today.getDate() + 30);
+
+    return data.inventory.filter((product: any) => {
+      const matchesSearch = !query || product.name.toLowerCase().includes(query) || String(product.sku).toLowerCase().includes(query)
+      if (!matchesSearch) return false
+
+      const prodRaw = rawProducts.find((p: any) => p.sku === product.sku);
+      const lotRaw = rawLots.find((l: any) => l.productId === product.id || l.sku === product.sku);
+      
+      const expDateStr = product.expirationDate || lotRaw?.expirationDate || prodRaw?.expirationDate;
+      const avgSales = product.averageDailySales || prodRaw?.averageDailySales || 0;
+      const currentStock = product.currentStock || 0;
+
+      if (filterMode === 'all') return true
+
+      if (!expDateStr) return false
+      const expDate = new Date(`${expDateStr}T00:00:00Z`);
+
+      if (filterMode === 'expired') {
+        return expDate < today
+      }
+      
+      if (filterMode === 'expiringSoon') {
+        return expDate >= today && expDate <= thirtyDays
+      }
+      
+      if (filterMode === 'risk') {
+        if (avgSales <= 0 || expDate < today) return false
+        const daysToSell = currentStock / avgSales;
+        const daysToExpire = (expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24);
+        return daysToSell > daysToExpire
+      }
+
+      return true
+    })
+  }, [data, search, filterMode, rawProducts, rawLots])
+
   async function runMutation(task: () => Promise<unknown>, successText: string) {
     setMessage(null)
     setIsSubmitting(true)
@@ -173,17 +209,25 @@ function InventoryDashboard() {
         </section>
 
         <section className="stats-grid">
-          <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(dashboardStats.totalUnits)} detail={`${dashboardStats.totalProducts} productos activos`} tone="ink" />
-          <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(dashboardStats.expiringSoon)} detail="unidades para priorizar" tone="amber" />
-          <StatCard icon={<AlertTriangle />} label="Riesgo de merma" value={numberFormatter.format(dashboardStats.risk)} detail="vencerán antes de venderse" tone="rose" />
-          <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(dashboardStats.expired)} detail="unidades vencidas" tone="green" />
+          <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(dashboardStats.totalUnits)} detail={`${dashboardStats.totalProducts} productos activos`} tone="ink" onClick={() => setFilterMode('all')} active={filterMode === 'all'} />
+          <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(dashboardStats.expiringSoon)} detail="unidades para priorizar" tone="amber" onClick={() => setFilterMode('expiringSoon')} active={filterMode === 'expiringSoon'} />
+          <StatCard icon={<AlertTriangle />} label="Riesgo de merma" value={numberFormatter.format(dashboardStats.risk)} detail="vencerán antes de venderse" tone="rose" onClick={() => setFilterMode('risk')} active={filterMode === 'risk'} />
+          <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(dashboardStats.expired)} detail="unidades vencidas" tone="green" onClick={() => setFilterMode('expired')} active={filterMode === 'expired'} />
         </section>
 
         <div className="workspace">
           <div className="main-column">
             <section className="panel inventory-panel">
               <div className="panel-heading">
-                <div><span className="section-kicker">Existencias</span><h2>Inventario actual</h2></div>
+                <div>
+                  <span className="section-kicker">Existencias</span>
+                  <h2>
+                    {filterMode === 'all' && 'Inventario completo'}
+                    {filterMode === 'expiringSoon' && 'Próximos a vencer (30 días)'}
+                    {filterMode === 'risk' && 'Riesgo de merma'}
+                    {filterMode === 'expired' && 'Productos vencidos'}
+                  </h2>
+                </div>
                 <div className="inventory-tools" style={{ display: 'flex', gap: '8px' }}>
                   <label className="search-box">
                     <Search size={17} />
@@ -236,8 +280,8 @@ function InventoryDashboard() {
                 </div>
               ) : (
                 <div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}>
-                  <h3>Tu bodega parte aquí</h3>
-                  <p>Aún no hay productos registrados. Usá el panel lateral para cargarlos.</p>
+                  <h3>No hay resultados</h3>
+                  <p>No se encontraron productos para esta vista.</p>
                 </div>
               )}
             </section>
@@ -296,7 +340,6 @@ function InventoryDashboard() {
                 disabled={isSubmitting}
                 onSubmit={(payload: any) => runMutation(() => saveDailySnapshot(payload), 'Conteo diario guardado.')}
                 onBatchUpdate={async (items: any[]) => {
-                  // Actualizamos directamente la BD local para ajustar stock real
                   const rawProds = JSON.parse(localStorage.getItem('stock_products') || '[]')
                   items.forEach(item => {
                     const prodIndex = rawProds.findIndex((p: any) => p.sku.toLowerCase() === item.sku.toLowerCase())
@@ -317,9 +360,18 @@ function InventoryDashboard() {
   )
 }
 
-function StatCard({ icon, label, value, detail, tone }: any) {
+function StatCard({ icon, label, value, detail, tone, onClick, active }: any) {
   return (
-    <article className={`stat-card ${tone}`}>
+    <article 
+      className={`stat-card ${tone}`} 
+      onClick={onClick}
+      style={{ 
+        cursor: 'pointer', 
+        border: active ? '2px solid currentColor' : '1px solid transparent',
+        transform: active ? 'scale(1.02)' : 'none',
+        transition: 'all 0.2s ease'
+      }}
+    >
       <span className="stat-icon">{icon}</span>
       <div>
         <span>{label}</span>
@@ -371,9 +423,19 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
         }
         const quantity = parsedQty || 0
         
-        const expirationDate = parts[3]
+        // Manejo robusto de fechas
+        let expirationDate = parts[3];
+        if (expirationDate.includes('/')) {
+            const dateParts = expirationDate.split('/');
+            // Asumimos formato DD/MM/YYYY o D/M/YYYY
+            if (dateParts.length === 3) {
+                const day = dateParts[0].padStart(2, '0');
+                const month = dateParts[1].padStart(2, '0');
+                const year = dateParts[2].length === 2 ? `20${dateParts[2]}` : dateParts[2];
+                expirationDate = `${year}-${month}-${day}`;
+            }
+        }
 
-        // 5ta columna: Venta Promedio (Opcional)
         let avgDailySales = 0
         if (parts[4]) {
            const rawAvg = parts[4].trim()
@@ -474,7 +536,18 @@ function ReceiptForm({ data, disabled, onSubmit, onBatchSubmit }: any) {
         if (product) {
            const rawQty = parts[1].trim()
            const quantity = parseFloat(rawQty.replace(',', '.')) || 0
-           const expirationDate = parts[2]
+           let expirationDate = parts[2]
+           
+           if (expirationDate.includes('/')) {
+                const dateParts = expirationDate.split('/');
+                if (dateParts.length === 3) {
+                    const day = dateParts[0].padStart(2, '0');
+                    const month = dateParts[1].padStart(2, '0');
+                    const year = dateParts[2].length === 2 ? `20${dateParts[2]}` : dateParts[2];
+                    expirationDate = `${year}-${month}-${day}`;
+                }
+            }
+
            items.push({
              productId: product.id,
              reference: 'CARGA-MASIVA',
