@@ -41,7 +41,6 @@ function InventoryApp() {
 
   const handleLogin = (e: FormEvent) => {
     e.preventDefault()
-    // NUEVAS CLAVES DE ACCESO
     if (pinCode === 'Valen2026') { setRole('admin'); sessionStorage.setItem('app_role', 'admin') }
     else if (pinCode === 'Tolosa2026') { setRole('viewer'); sessionStorage.setItem('app_role', 'viewer') }
     else setError('Clave incorrecta. Intentá de nuevo.')
@@ -56,13 +55,12 @@ function InventoryApp() {
         <div style={{ background: 'white', padding: '40px', borderRadius: '16px', boxShadow: '0 4px 20px rgba(0,0,0,0.05)', textAlign: 'center', maxWidth: '400px', width: '100%' }}>
           <div style={{ background: '#e0e7ff', width: '60px', height: '60px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px', color: '#4f46e5' }}><Lock size={30} /></div>
           <h1 style={{ fontSize: '24px', margin: '0 0 8px', color: '#0f172a' }}>Acceso al Sistema</h1>
-          <p style={{ color: '#64748b', marginBottom: '24px' }}>Ingresá tu clave para ver el inventario en la Nube.</p>
+          <p style={{ color: '#64748b', marginBottom: '24px' }}>Ingresá tu clave para ver el inventario.</p>
           <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <input type="password" value={pinCode} onChange={(e) => { setPinCode(e.target.value); setError(''); }} placeholder="Escribí tu clave secreta..." style={{ padding: '12px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '16px', textAlign: 'center' }} autoFocus />
             {error && <span style={{ color: '#ef4444', fontSize: '14px', fontWeight: 500 }}>{error}</span>}
             <button type="submit" style={{ background: '#0f172a', color: 'white', padding: '14px', borderRadius: '8px', border: 'none', fontWeight: 600, fontSize: '16px', cursor: 'pointer' }}>Entrar</button>
           </form>
-          {/* El texto de ayuda fue eliminado por seguridad */}
         </div>
       </main>
     )
@@ -92,7 +90,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   useEffect(() => { void loadData() }, [])
 
   const handleClearAll = async () => {
-    if (confirm('¿Estás seguro de que querés BORRAR TODO de la NUBE para empezar de cero?')) {
+    if (confirm('¿Estás seguro de que querés BORRAR TODO para empezar de cero?')) {
       await clearAllDatabase()
       void loadData()
       setMessage({ type: 'success', text: 'Base de datos vaciada por completo.' })
@@ -183,7 +181,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       <header className="topbar">
         <a className="brand" href="#top">
           <span className="brand-mark"><Boxes size={20} /></span>
-          <span><strong>Stock al Día</strong><small>Control FEFO Cloud</small></span>
+          <span><strong>Stock al Día</strong><small>Control FEFO</small></span>
         </a>
         <div className="topbar-status" style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
           <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
@@ -212,11 +210,11 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                 </div>
                 <div className="inventory-tools" style={{ display: 'flex', gap: '8px' }}>
                   <label className="search-box"><Search size={17} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar..." /></label>
-                  {role === 'admin' && (<button onClick={handleClearAll} style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', padding: '0 12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}><Trash2 size={15} /> Vaciar BD</button>)}
+                  {role === 'admin' && (<button onClick={handleClearAll} style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', padding: '0 12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}><Trash2 size={15} /> Vaciar Todo</button>)}
                 </div>
               </div>
 
-              {loading ? (<div style={{ padding: '32px', textAlign: 'center' }}>Cargando desde Neon...</div>) 
+              {loading ? (<div style={{ padding: '32px', textAlign: 'center' }}>Cargando datos...</div>) 
               : viewTab === 'inventory' ? (
                 finalInventory.length > 0 ? (
                   <div className="inventory-list">
@@ -267,48 +265,68 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
               {actionMode === 'initial' && (
                 <InitialForm disabled={isSubmitting} onSubmit={(payload: any) => runMutation(() => createInitialStock(payload), 'Producto guardado.')}
                   onBatchSubmit={async (items: any[]) => {
-                    for (const item of items) { await createInitialStock(item); }
-                    await loadData(); setMessage({ type: 'success', text: `${items.length} productos cargados.` })
+                    setIsSubmitting(true); setMessage(null);
+                    try {
+                      localStorage.setItem('stock_products', JSON.stringify([]))
+                      localStorage.setItem('stock_lots', JSON.stringify([]))
+                      for (const item of items) { await createInitialStock(item); }
+                      await loadData(); 
+                      setMessage({ type: 'success', text: `${items.length} productos cargados.` })
+                    } catch (error: any) {
+                      setMessage({ type: 'error', text: error.message || 'Error al importar Excel.' })
+                    } finally { setIsSubmitting(false) }
                   }} />
               )}
 
               {actionMode === 'receipt' && (
                 <ReceiptForm data={data} disabled={isSubmitting} onSubmit={(payload: any) => runMutation(() => addReceipt(payload), 'Boleta cargada.')}
                   onBatchSubmit={async (items: any[]) => {
-                    for (const item of items) { await addReceipt(item); }
-                    await loadData(); setMessage({ type: 'success', text: `${items.length} productos ingresados.` })
+                    setIsSubmitting(true); setMessage(null);
+                    try {
+                      for (const item of items) { await addReceipt(item); }
+                      await loadData(); 
+                      setMessage({ type: 'success', text: `${items.length} productos ingresados.` })
+                    } catch (error: any) {
+                      setMessage({ type: 'error', text: error.message || 'Error al cargar boletas.' })
+                    } finally { setIsSubmitting(false) }
                   }} />
               )}
 
               {actionMode === 'snapshot' && (
                 <SnapshotForm data={data} disabled={isSubmitting} onSubmit={(payload: any) => runMutation(() => saveDailySnapshot(payload), 'Conteo guardado.')}
                   onBatchUpdate={async (items: any[]) => {
-                    const rawProds = [...(data.rawProducts || [])];
-                    const rawL = [...(data.rawLots || [])];
-                    const productsToUpdate = [];
-                    const newLots = [];
-                    
-                    items.forEach(item => {
-                      const prodIndex = rawProds.findIndex((p: any) => p.sku.toLowerCase() === item.sku.toLowerCase())
-                      if (prodIndex >= 0) {
-                        const prod = rawProds[prodIndex];
-                        const initialQty = prod.initialQuantity || 0;
-                        const pLots = rawL.filter((l:any) => l.productId === prod.id || l.sku === prod.sku);
-                        const totalIn = initialQty + pLots.reduce((s:number, l:any) => s + (l.quantity || 0), 0);
-                        const newTotalOut = totalIn - item.realQuantity;
-                        
-                        if (newTotalOut < 0) {
-                          newLots.push({ id: crypto.randomUUID(), productId: prod.id, sku: prod.sku, reference: 'AJUSTE-SOBRANTE', quantity: Math.abs(newTotalOut), receivedDate: todayIso() });
-                          productsToUpdate.push({ ...prod, totalOut: 0, initialQuantity: initialQty });
-                        } else {
-                          productsToUpdate.push({ ...prod, totalOut: newTotalOut, initialQuantity: initialQty });
+                    setIsSubmitting(true); setMessage(null);
+                    try {
+                      const rawProds = JSON.parse(localStorage.getItem('stock_products') || '[]')
+                      const rawL = JSON.parse(localStorage.getItem('stock_lots') || '[]')
+                      let lotsChanged = false;
+                      
+                      items.forEach(item => {
+                        const prodIndex = rawProds.findIndex((p: any) => p.sku.toLowerCase() === item.sku.toLowerCase())
+                        if (prodIndex >= 0) {
+                          const prod = rawProds[prodIndex];
+                          const initialQty = prod.initialQuantity !== undefined ? prod.initialQuantity : (prod.quantity || 0);
+                          const pLots = rawL.filter((l:any) => l.productId === prod.id || l.sku === prod.sku);
+                          const totalIn = initialQty + pLots.reduce((s:number, l:any) => s + (l.quantity || 0), 0);
+                          const newTotalOut = totalIn - item.realQuantity;
+                          
+                          if (newTotalOut < 0) {
+                            rawL.push({ id: crypto.randomUUID(), productId: prod.id, sku: prod.sku, reference: 'AJUSTE-SOBRANTE', quantity: Math.abs(newTotalOut), expirationDate: '', receivedDate: todayIso() });
+                            lotsChanged = true;
+                            rawProds[prodIndex].totalOut = 0;
+                          } else {
+                            rawProds[prodIndex].totalOut = newTotalOut;
+                          }
+                          if (prod.initialQuantity === undefined) rawProds[prodIndex].initialQuantity = initialQty;
                         }
-                      }
-                    })
-                    
-                    await syncAdjustments(productsToUpdate, newLots);
-                    await loadData();
-                    setMessage({ type: 'success', text: `Stock ajustado en la Nube para ${items.length} productos.` })
+                      })
+                      localStorage.setItem('stock_products', JSON.stringify(rawProds))
+                      if (lotsChanged) localStorage.setItem('stock_lots', JSON.stringify(rawL))
+                      await loadData()
+                      setMessage({ type: 'success', text: `Stock ajustado (FEFO) para ${items.length} productos.` })
+                    } catch (error: any) {
+                      setMessage({ type: 'error', text: error.message || 'Error al ajustar stock.' })
+                    } finally { setIsSubmitting(false) }
                   }} />
               )}
             </aside>
@@ -396,13 +414,13 @@ function SnapshotForm({ disabled, onSubmit, onBatchUpdate }: any) {
     const lines = excelText.split(/\r?\n/).map(l => l.trim()).filter(Boolean); const items = [];
     for (const line of lines) { const parts = line.split('\t').map(p => p.trim()); if (parts.length >= 2) items.push({ sku: parts[0], realQuantity: parseFloat(parts[1].trim().replace(',', '.')) || 0 }); }
     if (items.length === 0) return alert('Faltan datos.');
-    if (confirm(`¿Actualizar en la nube el stock de estos ${items.length} productos?`)) { await onBatchUpdate(items); setExcelText(''); }
+    if (confirm(`¿Actualizar el stock de estos ${items.length} productos?`)) { await onBatchUpdate(items); setExcelText(''); }
   }
   return (
     <div className="action-form">
       <h2>Ajuste de Stock</h2>
       <div style={{ display: 'flex', gap: '8px', margin: '12px 0' }}><button type="button" className={`mini-action ${!isExcel ? 'active' : ''}`} onClick={() => setIsExcel(false)}>Nota</button><button type="button" className={`mini-action ${isExcel ? 'active' : ''}`} onClick={() => setIsExcel(true)}><Table size={14} /> Excel</button></div>
-      {isExcel ? (<div><textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej: HAR-01  120" /><button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Pisar Stock (Nube)</button></div>) : (<form onSubmit={(e) => void handleSubmit(e)}><label className="field"><span>Obs.</span><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} /></label><button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>Guardar</button></form>)}
+      {isExcel ? (<div><textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej: HAR-01  120" /><button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Pisar Stock</button></div>) : (<form onSubmit={(e) => void handleSubmit(e)}><label className="field"><span>Obs.</span><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} /></label><button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>Guardar</button></form>)}
     </div>
   )
 }
