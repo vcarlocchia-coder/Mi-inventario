@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 
-const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Tu URL de Neon con clave activa
+const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Asegurate de mantener tu enlace real de Neon
 
 function getSql() {
   const connectionString = 
@@ -109,16 +109,24 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
 
   for (const lot of newLots) {
     const pId = String(lot.productId);
-    const realQty = parseQuantity(lot.quantity);
-    const expDate = lot.expirationDate || null;
+    const countedQuantity = parseQuantity(lot.quantity); // El número real del conteo
 
-    // 1. Borramos los lotes viejos acumulados de este producto
-    await sql`DELETE FROM lots WHERE product_id = ${pId}`;
+    // 1. Consultamos todas las entradas registradas hasta el momento
+    const existingLots = await sql`SELECT quantity FROM lots WHERE product_id = ${pId}`;
+    const totalIn = existingLots.reduce((acc: number, l: any) => acc + parseQuantity(l.quantity), 0);
 
-    // 2. Reseteamos total_out
-    await sql`UPDATE products SET total_out = 0 WHERE id = ${pId}`;
+    // 2. Calculamos las salidas exactas (totalOut) necesarias para dejar el stock en el valor contado
+    let calculatedTotalOut = totalIn - countedQuantity;
+    if (calculatedTotalOut < 0) calculatedTotalOut = 0;
 
-    // 3. Creamos el lote ajustado CON la fecha de vencimiento
+    // 3. Actualizamos la salida en la tabla de productos (sin borrar ningún lote previo)
+    await sql`
+      UPDATE products 
+      SET total_out = ${calculatedTotalOut}
+      WHERE id = ${pId}
+    `;
+
+    // 4. Guardamos una entrada de registro en el Historial para auditar el Conteo
     await sql`
       INSERT INTO lots (id, product_id, sku, source_type, source_reference, quantity, expiration_date, received_date)
       VALUES (
@@ -126,9 +134,9 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
         ${pId}, 
         ${lot.sku || ''}, 
         'adjustment', 
-        'Ajuste por Conteo Real', 
-        ${realQty}, 
-        ${expDate}, 
+        ${'Conteo registrado: ' + countedQuantity + ' unid'}, 
+        0, 
+        ${lot.expirationDate || null}, 
         ${lot.receivedDate || new Date().toISOString().slice(0, 10)}
       )
     `;
