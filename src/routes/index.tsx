@@ -1,4 +1,4 @@
-import { createFileRoute, useRouter } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
 import {
   AlertTriangle,
   ArrowDownToLine,
@@ -18,7 +18,7 @@ import {
   Table,
   XCircle,
 } from 'lucide-react'
-import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import {
   addReceipt,
   createInitialStock,
@@ -27,12 +27,10 @@ import {
 } from '../../inventory.functions'
 
 export const Route = createFileRoute('/')({
-  loader: () => getInventoryDashboard(),
   component: InventoryDashboard,
 })
 
 type ActionMode = 'initial' | 'receipt' | 'snapshot'
-type DashboardData = Awaited<ReturnType<typeof getInventoryDashboard>>
 type SnapshotPayload = { snapshotDate: string; notes: string; items: Array<{ sku: string; quantity: number }> }
 type ReceiptPayload = { productId: number; reference: string; quantity: number; expirationDate: string; receivedDate: string }
 type InitialPayload = { sku: string; name: string; unit: string; minimumStock: number; averageDailySales: number; quantity: number; expirationDate: string; receivedDate: string }
@@ -63,20 +61,40 @@ function expiryLabel(days: number) {
 }
 
 function InventoryDashboard() {
-  const data = Route.useLoaderData()
-  const router = useRouter()
+  const [data, setData] = useState<any>({
+    inventory: [],
+    recentSnapshots: [],
+    summary: { totalProducts: 0, totalUnits: 0, lowStockProducts: 0, expiringSoonUnits: 0, expiredUnits: 0, riskUnits: 0 },
+  })
+  const [loading, setLoading] = useState(true)
   const [actionMode, setActionMode] = useState<ActionMode>('snapshot')
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'attention' | 'risk' | 'ok'>('all')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
+  const loadData = async () => {
+    try {
+      const result = await getInventoryDashboard()
+      if (result) setData(result)
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void loadData()
+  }, [])
+
   const filteredInventory = useMemo(() => {
+    if (!data?.inventory) return []
     const query = search.trim().toLowerCase()
-    return data.inventory.filter((product) => {
+    return data.inventory.filter((product: any) => {
       const matchesSearch = !query || product.name.toLowerCase().includes(query) || product.sku.toLowerCase().includes(query)
-      const hasRisk = product.activeLots.some(lot => lot.willExpireBeforeSale)
-      const needsAttention = product.currentStock <= product.minimumStock || product.activeLots.some((lot) => lot.daysToExpire <= 30) || hasRisk
+      const hasRisk = product.activeLots?.some((lot: any) => lot.willExpireBeforeSale)
+      const needsAttention = product.currentStock <= product.minimumStock || product.activeLots?.some((lot: any) => lot.daysToExpire <= 30) || hasRisk
       
       let matchesStatus = true
       if (statusFilter === 'attention') matchesStatus = needsAttention
@@ -85,19 +103,22 @@ function InventoryDashboard() {
       
       return matchesSearch && matchesStatus
     })
-  }, [data.inventory, search, statusFilter])
+  }, [data, search, statusFilter])
 
-  const upcomingLots = useMemo(() => data.inventory
-    .flatMap((product) => product.activeLots.map((lot) => ({ ...lot, productName: product.name, sku: product.sku, unit: product.unit })))
-    .sort((a, b) => a.expirationDate.localeCompare(b.expirationDate))
-    .slice(0, 6), [data.inventory])
+  const upcomingLots = useMemo(() => {
+    if (!data?.inventory) return []
+    return data.inventory
+      .flatMap((product: any) => product.activeLots.map((lot: any) => ({ ...lot, productName: product.name, sku: product.sku, unit: product.unit })))
+      .sort((a: any, b: any) => a.expirationDate.localeCompare(b.expirationDate))
+      .slice(0, 6)
+  }, [data])
 
   async function runMutation(task: () => Promise<unknown>, successText: string) {
     setMessage(null)
     setIsSubmitting(true)
     try {
       await task()
-      await router.invalidate()
+      await loadData()
       setMessage({ type: 'success', text: successText })
     } catch (error) {
       setMessage({ type: 'error', text: getErrorMessage(error) })
@@ -156,9 +177,11 @@ function InventoryDashboard() {
                 </div>
               </div>
 
-              {filteredInventory.length > 0 ? (
+              {loading ? (
+                <div style={{ padding: '24px', textAlign: 'center', color: '#666' }}>Cargando inventario...</div>
+              ) : filteredInventory.length > 0 ? (
                 <div className="inventory-list">
-                  {filteredInventory.map((product) => (
+                  {filteredInventory.map((product: any) => (
                     <article className="product-row" key={product.id}>
                       <div className="product-identity">
                         <span className="sku-tag">{product.sku}</span>
@@ -169,7 +192,7 @@ function InventoryDashboard() {
                       </div>
                       <div className="stock-number"><strong>{numberFormatter.format(product.currentStock)}</strong><span>{product.unit}</span></div>
                       <div className="lot-stack">
-                        {product.activeLots.length ? product.activeLots.slice(0, 3).map((lot) => (
+                        {product.activeLots?.length ? product.activeLots.slice(0, 3).map((lot: any) => (
                           <div className="lot-line" key={lot.id}>
                             <span className={`expiry-dot ${lot.daysToExpire < 0 ? 'expired' : lot.daysToExpire <= 30 ? 'soon' : ''}`} />
                             <span>{numberFormatter.format(lot.remainingQuantity)} · {formatDate(lot.expirationDate)}</span>
@@ -179,9 +202,9 @@ function InventoryDashboard() {
                         )) : <span className="empty-inline">Sin stock disponible</span>}
                       </div>
                       <div className="row-status">
-                        {product.activeLots.some(lot => lot.willExpireBeforeSale) ? <span className="status-pill danger"><AlertTriangle size={13} /> Riesgo de merma</span>
+                        {product.activeLots?.some((lot: any) => lot.willExpireBeforeSale) ? <span className="status-pill danger"><AlertTriangle size={13} /> Riesgo de merma</span>
                           : product.currentStock <= product.minimumStock ? <span className="status-pill danger"><AlertTriangle size={13} /> Bajo mínimo</span>
-                          : product.activeLots.some((lot) => lot.daysToExpire <= 30) ? <span className="status-pill warning"><CalendarClock size={13} /> Revisar vencimiento</span>
+                          : product.activeLots?.some((lot: any) => lot.daysToExpire <= 30) ? <span className="status-pill warning"><CalendarClock size={13} /> Revisar vencimiento</span>
                           : <span className="status-pill success"><Check size={13} /> Al día</span>}
                       </div>
                     </article>
@@ -194,7 +217,7 @@ function InventoryDashboard() {
               <div className="panel-heading compact"><div><span className="section-kicker">Rotación FEFO</span><h2>Próximos vencimientos</h2></div><span className="explanation">Primero vence, primero sale</span></div>
               {upcomingLots.length ? (
                 <div className="expiry-list">
-                  {upcomingLots.map((lot) => {
+                  {upcomingLots.map((lot: any) => {
                     const expiration = new Date(`${lot.expirationDate}T00:00:00Z`)
                     return (
                       <div className="expiry-item" key={lot.id}>
@@ -231,7 +254,7 @@ function InventoryDashboard() {
         <section className="history-strip">
           <div><span className="section-kicker">Historial</span><h2>Últimos conteos de apertura</h2></div>
           <div className="history-items">
-            {data.recentSnapshots.length ? data.recentSnapshots.map((snapshot, index) => (
+            {data.recentSnapshots?.length ? data.recentSnapshots.map((snapshot: any, index: number) => (
               <div className="history-item" key={snapshot.id}><span className="history-index">{String(index + 1).padStart(2, '0')}</span><div><strong>{formatDate(snapshot.snapshotDate)}</strong><small>{snapshot.notes || 'Conteo diario sin observaciones'}</small></div></div>
             )) : <span className="history-empty">Todavía no hay conteos guardados.</span>}
           </div>
@@ -249,8 +272,8 @@ function EmptyInventory({ hasProducts, onCreate }: { hasProducts: boolean; onCre
   return <div className="empty-state"><span className="empty-illustration"><Boxes size={38} /></span><div><h3>{hasProducts ? 'No hay coincidencia' : 'Tu bodega parte aquí'}</h3><p>{hasProducts ? 'Prueba otro término o cambia el filtro.' : 'Crea el primer producto con su cantidad y vencimiento base.'}</p></div>{!hasProducts && <button className="secondary-button" onClick={onCreate}><Plus size={16} /> Cargar stock inicial</button>}</div>
 }
 
-function SnapshotForm({ data, disabled, onSubmit }: { data: DashboardData; disabled: boolean; onSubmit: (payload: SnapshotPayload) => Promise<void> }) {
-  const suggestedRows = data.inventory.map((product) => `${product.sku};${product.currentStock}`).join('\n')
+function SnapshotForm({ data, disabled, onSubmit }: { data: any; disabled: boolean; onSubmit: (payload: SnapshotPayload) => Promise<void> }) {
+  const suggestedRows = data.inventory?.map((product: any) => `${product.sku};${product.currentStock}`).join('\n') || ''
   const [rawStock, setRawStock] = useState(suggestedRows)
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -262,7 +285,7 @@ function SnapshotForm({ data, disabled, onSubmit }: { data: DashboardData; disab
       return { sku: sku?.trim() ?? '', quantity: Number(quantity) }
     })
 
-    const knownSkus = data.inventory.map(p => p.sku.toLowerCase())
+    const knownSkus = data.inventory?.map((p: any) => p.sku.toLowerCase()) || []
     const items = allItems.filter(item => knownSkus.includes(item.sku.toLowerCase()))
 
     if (items.some((item) => !item.sku || !Number.isInteger(item.quantity) || item.quantity < 0)) {
@@ -288,20 +311,20 @@ function SnapshotForm({ data, disabled, onSubmit }: { data: DashboardData; disab
       <label className="field"><span>Base diaria <small>SKU;CANTIDAD</small></span><textarea value={rawStock} onChange={(event) => setRawStock(event.target.value)} placeholder={'HAR-001;24\nLEC-200;12'} rows={8} required /></label>
       <button className="mini-action" type="button" onClick={() => setRawStock(suggestedRows)}><RotateCcw size={14} /> Usar stock calculado como base</button>
       <label className="field"><span>Observación <small>opcional</small></span><input name="notes" placeholder="Ej. Conteo turno mañana" maxLength={300} /></label>
-      <button className="submit-button" disabled={disabled || data.inventory.length === 0}><ArrowDownToLine size={18} /> {disabled ? 'Guardando…' : 'Actualizar inventario'}</button>
-      {data.inventory.length === 0 && <p className="form-hint warning-text">Primero carga al menos un producto.</p>}
+      <button className="submit-button" disabled={disabled || data.inventory?.length === 0}><ArrowDownToLine size={18} /> {disabled ? 'Guardando…' : 'Actualizar inventario'}</button>
+      {data.inventory?.length === 0 && <p className="form-hint warning-text">Primero carga al menos un producto.</p>}
       <p className="form-hint">Las diferencias se descuentan por vencimiento más próximo (FEFO).</p>
     </form>
   )
 }
 
-function ReceiptForm({ data, disabled, onSubmit }: { data: DashboardData; disabled: boolean; onSubmit: (payload: ReceiptPayload) => Promise<void> }) {
+function ReceiptForm({ data, disabled, onSubmit }: { data: any; disabled: boolean; onSubmit: (payload: ReceiptPayload) => Promise<void> }) {
   const [skuInput, setSkuInput] = useState('')
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     
-    const product = data.inventory.find(p => p.sku.toLowerCase() === skuInput.trim().toLowerCase())
+    const product = data.inventory?.find((p: any) => p.sku.toLowerCase() === skuInput.trim().toLowerCase())
     
     if (!product) {
       window.alert(`⚠️ El SKU "${skuInput}" no existe en tu base inicial.\n\nVerifica que esté bien escrito o ve a "Inicial" para crearlo.`)
@@ -339,7 +362,7 @@ function ReceiptForm({ data, disabled, onSubmit }: { data: DashboardData; disabl
           required 
         />
         <datalist id="skus-disponibles">
-          {data.inventory.map((product) => (
+          {data.inventory?.map((product: any) => (
             <option value={product.sku} key={product.id}>{product.name}</option>
           ))}
         </datalist>
@@ -348,8 +371,8 @@ function ReceiptForm({ data, disabled, onSubmit }: { data: DashboardData; disabl
       <label className="field"><span>Nº de boleta o referencia</span><input name="reference" placeholder="Ej. BOL-10482" required maxLength={100} /></label>
       <div className="field-pair"><label className="field"><span>Cantidad</span><input type="number" name="quantity" min="1" step="1" placeholder="0" required /></label><label className="field"><span>Fecha de ingreso</span><input type="date" name="receivedDate" defaultValue={todayIso()} required /></label></div>
       <label className="field"><span>Fecha de vencimiento</span><input type="date" name="expirationDate" required /></label>
-      <button className="submit-button" disabled={disabled || data.inventory.length === 0}><Plus size={18} /> {disabled ? 'Guardando…' : 'Sumar lote al stock'}</button>
-      {data.inventory.length === 0 && <p className="form-hint warning-text">Crea el producto en “Inicial” antes de cargar su boleta.</p>}
+      <button className="submit-button" disabled={disabled || data.inventory?.length === 0}><Plus size={18} /> {disabled ? 'Guardando…' : 'Sumar lote al stock'}</button>
+      {data.inventory?.length === 0 && <p className="form-hint warning-text">Crea el producto en “Inicial” antes de cargar su boleta.</p>}
     </form>
   )
 }
@@ -381,7 +404,6 @@ function InitialStockForm({ disabled, onSubmit, onBatchSubmit }: { disabled: boo
     const items: InitialPayload[] = []
 
     for (const line of lines) {
-      // Formato esperado tabulado de Excel: SKU  NOMBRE  CANTIDAD  VENCIMIENTO (YYYY-MM-DD)  [MIN]  [VENTA_DIARIA]
       const parts = line.split(/[\t;]+/)
       if (parts.length >= 4) {
         items.push({
