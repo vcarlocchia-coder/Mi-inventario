@@ -149,21 +149,31 @@ function InventoryDashboard() {
                 <div style={{ padding: '32px', textAlign: 'center', color: '#666' }}>Cargando datos...</div>
               ) : filteredInventory.length > 0 ? (
                 <div className="inventory-list">
-                  {filteredInventory.map((product: any) => (
-                    <article className="product-row" key={product.id || product.sku}>
-                      <div className="product-identity">
-                        <span className="sku-tag">{product.sku}</span>
-                        <div>
-                          <h3>{product.name}</h3>
-                          <p>Venta prom: {product.averageDailySales || 0}/día</p>
+                  {filteredInventory.map((product: any) => {
+                    // Buscar la fecha de vencimiento (puede venir directo o desde un lote)
+                    const expDate = product.expirationDate || (product.lots && product.lots.length > 0 ? product.lots[0].expirationDate : null)
+                    
+                    return (
+                      <article className="product-row" key={product.id || product.sku}>
+                        <div className="product-identity">
+                          <span className="sku-tag">{product.sku}</span>
+                          <div>
+                            <h3>{product.name}</h3>
+                            <p>
+                              Venta prom: {product.averageDailySales || 0}/día 
+                              <span style={{ marginLeft: '12px', color: '#b91c1c', fontWeight: 500 }}>
+                                🗓️ Vence: {expDate ? formatDate(expDate) : 'Sin fecha'}
+                              </span>
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                      <div className="stock-number">
-                        <strong>{numberFormatter.format(product.currentStock || 0)}</strong>
-                        <span>{product.unit || 'unid'}</span>
-                      </div>
-                    </article>
-                  ))}
+                        <div className="stock-number">
+                          <strong>{numberFormatter.format(product.currentStock || 0)}</strong>
+                          <span>{product.unit || 'unid'}</span>
+                        </div>
+                      </article>
+                    )
+                  })}
                 </div>
               ) : (
                 <div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}>
@@ -271,18 +281,14 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
         const sku = parts[0]
         const name = parts[1]
         
-        // --- LÓGICA INTELIGENTE DE DECIMALES ---
         const rawQty = parts[2].trim()
         let parsedQty = 0
         if (rawQty.includes(',') && rawQty.includes('.')) {
-          // Si tiene punto de miles y coma decimal (ej: 1.000,50)
           parsedQty = parseFloat(rawQty.replace(/\./g, '').replace(',', '.'))
         } else {
-          // Si solo tiene coma (68,75) o solo tiene punto (68.75)
           parsedQty = parseFloat(rawQty.replace(',', '.'))
         }
         const quantity = parsedQty || 0
-        // ---------------------------------------
         
         const expirationDate = parts[3]
 
