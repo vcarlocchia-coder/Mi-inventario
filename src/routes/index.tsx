@@ -78,6 +78,15 @@ function InventoryDashboard() {
     }
   }
 
+  // Rescatamos los datos crudos directo de la memoria para forzar la lectura de la fecha
+  const rawProducts = useMemo(() => {
+    try { return JSON.parse(localStorage.getItem('stock_products') || '[]') } catch { return [] }
+  }, [data])
+  
+  const rawLots = useMemo(() => {
+    try { return JSON.parse(localStorage.getItem('stock_lots') || '[]') } catch { return [] }
+  }, [data])
+
   const filteredInventory = useMemo(() => {
     if (!data?.inventory) return []
     const query = search.trim().toLowerCase()
@@ -150,9 +159,17 @@ function InventoryDashboard() {
               ) : filteredInventory.length > 0 ? (
                 <div className="inventory-list">
                   {filteredInventory.map((product: any) => {
-                    // Buscar la fecha de vencimiento (puede venir directo o desde un lote)
-                    const expDate = product.expirationDate || (product.lots && product.lots.length > 0 ? product.lots[0].expirationDate : null)
+                    // Cruzamos con la BD cruda para forzar la lectura del vencimiento
+                    const prodRaw = rawProducts.find((p: any) => p.sku === product.sku)
+                    const lotRaw = rawLots.find((l: any) => l.productId === product.id || l.sku === product.sku)
                     
+                    const expDate = product.expirationDate 
+                                 || product.nextExpirationDate 
+                                 || (product.lots && product.lots.length > 0 ? product.lots[0].expirationDate : null)
+                                 || lotRaw?.expirationDate 
+                                 || prodRaw?.expirationDate 
+                                 || null
+
                     return (
                       <article className="product-row" key={product.id || product.sku}>
                         <div className="product-identity">
