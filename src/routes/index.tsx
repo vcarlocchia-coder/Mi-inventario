@@ -16,9 +16,8 @@ import {
   ShieldCheck,
   Sparkles,
   Table,
-  XCircle,
 } from 'lucide-react'
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
   addReceipt,
   createInitialStock,
@@ -35,7 +34,6 @@ type ActionMode = 'initial' | 'receipt' | 'snapshot'
 const dateFormatter = new Intl.DateTimeFormat('es-CL', {
   day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC',
 })
-const monthFormatter = new Intl.DateTimeFormat('es-CL', { month: 'short', timeZone: 'UTC' })
 const numberFormatter = new Intl.NumberFormat('es-CL')
 
 function todayIso() {
@@ -43,6 +41,7 @@ function todayIso() {
 }
 
 function formatDate(value: string) {
+  if (!value) return ''
   return dateFormatter.format(new Date(`${value}T00:00:00Z`))
 }
 
@@ -55,7 +54,6 @@ function InventoryDashboard() {
   const [loading, setLoading] = useState(true)
   const [actionMode, setActionMode] = useState<ActionMode>('initial')
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState<'all' | 'attention' | 'risk' | 'ok'>('all')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
@@ -64,7 +62,7 @@ function InventoryDashboard() {
       const result = await getInventoryDashboard()
       if (result) setData(result)
     } catch (e) {
-      console.error(e)
+      console.error('Error cargando datos:', e)
     } finally {
       setLoading(false)
     }
@@ -78,18 +76,9 @@ function InventoryDashboard() {
     if (!data?.inventory) return []
     const query = search.trim().toLowerCase()
     return data.inventory.filter((product: any) => {
-      const matchesSearch = !query || product.name.toLowerCase().includes(query) || product.sku.toLowerCase().includes(query)
-      const hasRisk = product.activeLots?.some((lot: any) => lot.willExpireBeforeSale)
-      const needsAttention = product.currentStock <= product.minimumStock || product.activeLots?.some((lot: any) => lot.daysToExpire <= 30) || hasRisk
-      
-      let matchesStatus = true
-      if (statusFilter === 'attention') matchesStatus = needsAttention
-      if (statusFilter === 'risk') matchesStatus = hasRisk
-      if (statusFilter === 'ok') matchesStatus = !needsAttention
-      
-      return matchesSearch && matchesStatus
+      return !query || product.name.toLowerCase().includes(query) || product.sku.toLowerCase().includes(query)
     })
-  }, [data, search, statusFilter])
+  }, [data, search])
 
   async function runMutation(task: () => Promise<unknown>, successText: string) {
     setMessage(null)
@@ -113,7 +102,11 @@ function InventoryDashboard() {
           <span className="brand-mark"><Boxes size={20} /></span>
           <span><strong>Stock al Día</strong><small>Control por vencimiento</small></span>
         </a>
-        <div className="topbar-status"><span className="live-dot" /><span>Inventario listo</span><strong>{formatDate(todayIso())}</strong></div>
+        <div className="topbar-status">
+          <span className="live-dot" />
+          <span>Inventario al día</span>
+          <strong>{formatDate(todayIso())}</strong>
+        </div>
       </header>
 
       <div className="page" id="top">
@@ -124,10 +117,10 @@ function InventoryDashboard() {
         </section>
 
         <section className="stats-grid">
-          <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(data.summary.totalUnits)} detail={`${data.summary.totalProducts} productos activos`} tone="ink" />
-          <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(data.summary.expiringSoonUnits)} detail="unidades para priorizar" tone="amber" />
-          <StatCard icon={<AlertTriangle />} label="Riesgo de merma" value={numberFormatter.format(data.summary.riskUnits || 0)} detail="vencerán antes de venderse" tone="rose" />
-          <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(data.summary.expiredUnits)} detail="unidades vencidas" tone="green" />
+          <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(data?.summary?.totalUnits || 0)} detail={`${data?.summary?.totalProducts || 0} productos activos`} tone="ink" />
+          <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(data?.summary?.expiringSoonUnits || 0)} detail="unidades para priorizar" tone="amber" />
+          <StatCard icon={<AlertTriangle />} label="Riesgo de merma" value={numberFormatter.format(data?.summary?.riskUnits || 0)} detail="vencerán antes de venderse" tone="rose" />
+          <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(data?.summary?.expiredUnits || 0)} detail="unidades vencidas" tone="green" />
         </section>
 
         <div className="workspace">
@@ -136,31 +129,37 @@ function InventoryDashboard() {
               <div className="panel-heading">
                 <div><span className="section-kicker">Existencias</span><h2>Inventario actual</h2></div>
                 <div className="inventory-tools">
-                  <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar SKU o producto" /></label>
+                  <label className="search-box">
+                    <Search size={17} />
+                    <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar SKU o producto" />
+                  </label>
                 </div>
               </div>
 
               {loading ? (
-                <div style={{ padding: '24px', textAlign: 'center' }}>Cargando datos...</div>
+                <div style={{ padding: '32px', textAlign: 'center', color: '#666' }}>Cargando datos...</div>
               ) : filteredInventory.length > 0 ? (
                 <div className="inventory-list">
                   {filteredInventory.map((product: any) => (
-                    <article className="product-row" key={product.id}>
+                    <article className="product-row" key={product.id || product.sku}>
                       <div className="product-identity">
                         <span className="sku-tag">{product.sku}</span>
                         <div>
                           <h3>{product.name}</h3>
-                          <p>Venta prom: {product.averageDailySales}/día</p>
+                          <p>Venta prom: {product.averageDailySales || 0}/día</p>
                         </div>
                       </div>
-                      <div className="stock-number"><strong>{numberFormatter.format(product.currentStock)}</strong><span>{product.unit}</span></div>
+                      <div className="stock-number">
+                        <strong>{numberFormatter.format(product.currentStock || 0)}</strong>
+                        <span>{product.unit || 'unid'}</span>
+                      </div>
                     </article>
                   ))}
                 </div>
               ) : (
                 <div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}>
-                  <h3>No hay productos registrados</h3>
-                  <p>Cargá tu primer producto desde el panel lateral derecho.</p>
+                  <h3>Tu bodega parte aquí</h3>
+                  <p>Aún no hay productos registrados. Usá el panel lateral para cargarlos.</p>
                 </div>
               )}
             </section>
@@ -168,16 +167,22 @@ function InventoryDashboard() {
 
           <aside className="action-panel">
             <div className="action-tabs">
-              <button className={actionMode === 'initial' ? 'active' : ''} onClick={() => setActionMode('initial')}><FilePlus2 size={17} /> Inicial / Excel</button>
-              <button className={actionMode === 'receipt' ? 'active' : ''} onClick={() => setActionMode('receipt')}><ReceiptText size={17} /> Boleta</button>
+              <button className={actionMode === 'initial' ? 'active' : ''} onClick={() => { setActionMode('initial'); setMessage(null); }}><FilePlus2 size={17} /> Inicial / Excel</button>
+              <button className={actionMode === 'receipt' ? 'active' : ''} onClick={() => { setActionMode('receipt'); setMessage(null); }}><ReceiptText size={17} /> Boleta</button>
+              <button className={actionMode === 'snapshot' ? 'active' : ''} onClick={() => { setActionMode('snapshot'); setMessage(null); }}><ClipboardPaste size={17} /> Conteo</button>
             </div>
-            {message && <div className={`form-message ${message.type}`}><span>{message.text}</span></div>}
+
+            {message && (
+              <div className={`form-message ${message.type}`}>
+                <span>{message.text}</span>
+              </div>
+            )}
             
             {actionMode === 'initial' && (
               <InitialForm
                 disabled={isSubmitting}
-                onSubmit={(payload) => runMutation(() => createInitialStock(payload), 'Producto guardado con éxito.')}
-                onBatchSubmit={async (items) => {
+                onSubmit={(payload: any) => runMutation(() => createInitialStock(payload), 'Producto guardado con éxito.')}
+                onBatchSubmit={async (items: any[]) => {
                   for (const item of items) {
                     await createInitialStock(item)
                   }
@@ -191,7 +196,14 @@ function InventoryDashboard() {
               <ReceiptForm
                 data={data}
                 disabled={isSubmitting}
-                onSubmit={(payload) => runMutation(() => addReceipt(payload), 'Boleta cargada correctamente.')}
+                onSubmit={(payload: any) => runMutation(() => addReceipt(payload), 'Boleta cargada correctamente.')}
+              />
+            )}
+
+            {actionMode === 'snapshot' && (
+              <SnapshotForm
+                disabled={isSubmitting}
+                onSubmit={(payload: any) => runMutation(() => saveDailySnapshot(payload), 'Conteo diario guardado.')}
               />
             )}
           </aside>
@@ -202,7 +214,16 @@ function InventoryDashboard() {
 }
 
 function StatCard({ icon, label, value, detail, tone }: any) {
-  return <article className={`stat-card ${tone}`}><span className="stat-icon">{icon}</span><div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div></article>
+  return (
+    <article className={`stat-card ${tone}`}>
+      <span className="stat-icon">{icon}</span>
+      <div>
+        <span>{label}</span>
+        <strong>{value}</strong>
+        <small>{detail}</small>
+      </div>
+    </article>
+  )
 }
 
 function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
@@ -274,12 +295,12 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
       ) : (
         <form onSubmit={(e) => void handleSubmit(e)}>
           <div className="field-pair">
-            <label className="field"><span>SKU</span><input name="sku" required /></label>
+            <label className="field"><span>SKU</span><input name="sku" required placeholder="HAR-001" /></label>
             <label className="field"><span>Unidad</span><input name="unit" defaultValue="unidades" required /></label>
           </div>
-          <label className="field"><span>Nombre del producto</span><input name="name" required /></label>
+          <label className="field"><span>Nombre del producto</span><input name="name" required placeholder="Ej: Harina sin polvos 1kg" /></label>
           <div className="field-pair">
-            <label className="field"><span>Cantidad inicial</span><input type="number" name="quantity" required /></label>
+            <label className="field"><span>Cantidad inicial</span><input type="number" name="quantity" required placeholder="0" /></label>
             <label className="field"><span>Stock mínimo</span><input type="number" name="minimumStock" defaultValue="0" required /></label>
           </div>
           <div className="field-pair">
@@ -302,7 +323,7 @@ function ReceiptForm({ data, disabled, onSubmit }: any) {
     e.preventDefault()
     const product = data.inventory?.find((p: any) => p.sku.toLowerCase() === skuInput.trim().toLowerCase())
     if (!product) {
-      alert(`El SKU "${skuInput}" no existe. Crealos primero en "Inicial".`)
+      alert(`El SKU "${skuInput}" no existe en tu inventario. Cralo primero en la pestaña "Inicial / Excel".`)
       return
     }
     const form = new FormData(e.currentTarget)
@@ -321,15 +342,41 @@ function ReceiptForm({ data, disabled, onSubmit }: any) {
       <h2>Cargar boleta</h2>
       <label className="field">
         <span>SKU del Producto</span>
-        <input value={skuInput} onChange={(e) => setSkuInput(e.target.value)} required />
+        <input value={skuInput} onChange={(e) => setSkuInput(e.target.value)} required placeholder="Ej: HAR-001" />
       </label>
-      <label className="field"><span>Nº de boleta</span><input name="reference" required /></label>
+      <label className="field"><span>Nº de boleta / Referencia</span><input name="reference" required placeholder="Ej: BOL-1234" /></label>
       <div className="field-pair">
-        <label className="field"><span>Cantidad</span><input type="number" name="quantity" required /></label>
+        <label className="field"><span>Cantidad</span><input type="number" name="quantity" required placeholder="0" /></label>
         <label className="field"><span>Vencimiento</span><input type="date" name="expirationDate" required /></label>
       </div>
       <button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>
         Sumar a Stock
+      </button>
+    </form>
+  )
+}
+
+function SnapshotForm({ disabled, onSubmit }: any) {
+  const [notes, setNotes] = useState('')
+
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    await onSubmit({
+      snapshotDate: todayIso(),
+      notes,
+    })
+    setNotes('')
+  }
+
+  return (
+    <form className="action-form" onSubmit={(e) => void handleSubmit(e)}>
+      <h2>Conteo diario de cierre</h2>
+      <label className="field">
+        <span>Observaciones del día</span>
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Ej: Cierre de caja turno tarde sin novedades." rows={4} />
+      </label>
+      <button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>
+        Guardar Conteo Diario
       </button>
     </form>
   )
