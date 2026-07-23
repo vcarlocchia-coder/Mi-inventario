@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 
-const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Asegurate de mantener tu URL de Neon válida con la clave
+const NEON_URL = "TU_URL_DE_NEON_AQUI"; // Mantené tu URL con tu clave válida
 
 function getSql() {
   const connectionString = 
@@ -32,7 +32,7 @@ export async function getInventoryDashboard() {
       minimumStock: parseQuantity(p.minimum_stock),
       averageDailySales: parseQuantity(p.average_daily_sales),
       initialQuantity: 0,
-      totalOut: parseQuantity(p.total_out) // Acá viajan las salidas acumuladas
+      totalOut: parseQuantity(p.total_out)
     }));
 
     const rawLots = lots.map((l: any) => ({
@@ -107,8 +107,8 @@ export async function saveDailySnapshot(payload: any) {
 export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
   const sql = getSql();
 
-  // 1. Guardar/Actualizar el total de salidas acumuladas por producto
   for (const prod of productsToUpdate) {
+    // Si el ajuste indica actualizar la salida acumulada
     await sql`
       UPDATE products 
       SET total_out = ${parseQuantity(prod.totalOut)}
@@ -116,11 +116,22 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
     `;
   }
 
-  // 2. Insertar los lotes de ajuste o egreso
   for (const lot of newLots) {
+    const qty = parseQuantity(lot.quantity);
+    
+    // Si el ajuste viene como un valor negativo o diferencia
     await sql`
       INSERT INTO lots (id, product_id, sku, source_type, source_reference, quantity, expiration_date, received_date)
-      VALUES (${String(lot.id)}, ${String(lot.productId)}, ${lot.sku}, 'adjustment', ${lot.reference || 'Ajuste de Conteo'}, ${parseQuantity(lot.quantity)}, NULL, ${lot.receivedDate || new Date().toISOString().slice(0, 10)})
+      VALUES (
+        ${String(lot.id)}, 
+        ${String(lot.productId)}, 
+        ${lot.sku}, 
+        'adjustment', 
+        ${lot.reference || 'Ajuste de Conteo'}, 
+        ${qty}, 
+        NULL, 
+        ${lot.receivedDate || new Date().toISOString().slice(0, 10)}
+      )
     `;
   }
 }
