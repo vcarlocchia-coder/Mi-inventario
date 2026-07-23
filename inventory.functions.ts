@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 
-const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require";
+const NEON_URL = "TU_URL_DE_NEON_AQUI"; // Asegurate de mantener tu URL de Neon válida con la clave
 
 function getSql() {
   const connectionString = 
@@ -12,7 +12,6 @@ function getSql() {
   return neon(connectionString);
 }
 
-// Función auxiliar para procesar números respetando el 0
 function parseQuantity(val: any, defaultVal = 0): number {
   if (val === null || val === undefined || val === '') return defaultVal;
   const num = Number(val);
@@ -33,7 +32,7 @@ export async function getInventoryDashboard() {
       minimumStock: parseQuantity(p.minimum_stock),
       averageDailySales: parseQuantity(p.average_daily_sales),
       initialQuantity: 0,
-      totalOut: parseQuantity(p.total_out)
+      totalOut: parseQuantity(p.total_out) // Acá viajan las salidas acumuladas
     }));
 
     const rawLots = lots.map((l: any) => ({
@@ -72,7 +71,7 @@ export async function createInitialStock(payload: any) {
   const productId = String(payload.id || crypto.randomUUID());
   const lotId = String(crypto.randomUUID());
   const expDate = payload.expirationDate || null;
-  const qty = parseQuantity(payload.quantity, 0); // Si es 0, guarda 0
+  const qty = parseQuantity(payload.quantity, 0);
 
   await sql`
     INSERT INTO products (id, sku, name, unit, minimum_stock, average_daily_sales, initial_quantity, total_out)
@@ -108,18 +107,20 @@ export async function saveDailySnapshot(payload: any) {
 export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
   const sql = getSql();
 
+  // 1. Guardar/Actualizar el total de salidas acumuladas por producto
   for (const prod of productsToUpdate) {
     await sql`
       UPDATE products 
-      SET total_out = ${parseQuantity(prod.totalOut)}, initial_quantity = ${parseQuantity(prod.initialQuantity)} 
+      SET total_out = ${parseQuantity(prod.totalOut)}
       WHERE id = ${String(prod.id)}
     `;
   }
 
+  // 2. Insertar los lotes de ajuste o egreso
   for (const lot of newLots) {
     await sql`
       INSERT INTO lots (id, product_id, sku, source_type, source_reference, quantity, expiration_date, received_date)
-      VALUES (${String(lot.id)}, ${String(lot.productId)}, ${lot.sku}, 'adjustment', ${lot.reference}, ${parseQuantity(lot.quantity)}, NULL, ${lot.receivedDate})
+      VALUES (${String(lot.id)}, ${String(lot.productId)}, ${lot.sku}, 'adjustment', ${lot.reference || 'Ajuste de Conteo'}, ${parseQuantity(lot.quantity)}, NULL, ${lot.receivedDate || new Date().toISOString().slice(0, 10)})
     `;
   }
 }
