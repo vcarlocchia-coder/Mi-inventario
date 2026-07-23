@@ -1,10 +1,10 @@
 export async function getInventoryDashboard() {
   try {
     const res = await fetch('/api/inventory?action=getDashboard')
-    if (!res.ok) throw new Error('Error al cargar datos')
+    if (!res.ok) throw new Error('Error al conectar con la API')
     return await res.json()
   } catch (error) {
-    console.error(error)
+    console.error('Error cargando inventario:', error)
     return {
       inventory: [],
       recentSnapshots: [],
