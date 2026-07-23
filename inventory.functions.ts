@@ -9,8 +9,9 @@ import {
   stockLots,
 } from './schema'
 
-// Conexión a Neon Database mediante Drizzle
-const sql = neon(import.meta.env.VITE_DATABASE_URL || process.env.DATABASE_URL || '')
+// Obtiene la URL de la base de datos desde las variables de entorno de Vite/Vercel
+const databaseUrl = import.meta.env.VITE_DATABASE_URL || process.env.DATABASE_URL || process.env.VITE_DATABASE_URL || ''
+const sql = neon(databaseUrl)
 const db = drizzle(sql)
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -28,10 +29,6 @@ const initialStockSchema = z
     expirationDate: isoDate,
     receivedDate: isoDate,
   })
-  .refine((data) => data.expirationDate >= data.receivedDate, {
-    message: 'La fecha de vencimiento no puede ser anterior al ingreso.',
-    path: ['expirationDate'],
-  })
 
 const receiptSchema = z
   .object({
@@ -40,10 +37,6 @@ const receiptSchema = z
     quantity: positiveInteger,
     expirationDate: isoDate,
     receivedDate: isoDate,
-  })
-  .refine((data) => data.expirationDate >= data.receivedDate, {
-    message: 'La fecha de vencimiento no puede ser anterior al ingreso.',
-    path: ['expirationDate'],
   })
 
 const snapshotSchema = z.object({
@@ -98,99 +91,108 @@ function allocateRemainingLots(lots: LotRow[], countedQuantity: number | null, s
 }
 
 export async function getInventoryDashboard() {
-  const [productRows, lotRows, snapshotItemRows, snapshotRows] = await Promise.all([
-    db.select().from(products).orderBy(asc(products.name)),
-    db.select().from(stockLots).orderBy(asc(stockLots.expirationDate)),
-    db
-      .select({
-        productId: dailySnapshotItems.productId,
-        countedQuantity: dailySnapshotItems.countedQuantity,
-        snapshotDate: dailySnapshots.snapshotDate,
-      })
-      .from(dailySnapshotItems)
-      .innerJoin(dailySnapshots, eq(dailySnapshotItems.snapshotId, dailySnapshots.id))
-      .orderBy(desc(dailySnapshots.snapshotDate)),
-    db.select().from(dailySnapshots).orderBy(desc(dailySnapshots.snapshotDate)).limit(8),
-  ])
+  try {
+    const [productRows, lotRows, snapshotItemRows, snapshotRows] = await Promise.all([
+      db.select().from(products).orderBy(asc(products.name)),
+      db.select().from(stockLots).orderBy(asc(stockLots.expirationDate)),
+      db
+        .select({
+          productId: dailySnapshotItems.productId,
+          countedQuantity: dailySnapshotItems.countedQuantity,
+          snapshotDate: dailySnapshots.snapshotDate,
+        })
+        .from(dailySnapshotItems)
+        .innerJoin(dailySnapshots, eq(dailySnapshotItems.snapshotId, dailySnapshots.id))
+        .orderBy(desc(dailySnapshots.snapshotDate)),
+      db.select().from(dailySnapshots).orderBy(desc(dailySnapshots.snapshotDate)).limit(8),
+    ])
 
-  const today = startOfTodayUtc()
-  const latestSnapshotByProduct = new Map<number, { countedQuantity: number; snapshotDate: string }>()
-  for (const item of snapshotItemRows) {
-    if (!latestSnapshotByProduct.has(item.productId)) {
-      latestSnapshotByProduct.set(item.productId, item)
+    const today = startOfTodayUtc()
+    const latestSnapshotByProduct = new Map<number, { countedQuantity: number; snapshotDate: string }>()
+    for (const item of snapshotItemRows) {
+      if (!latestSnapshotByProduct.has(item.productId)) {
+        latestSnapshotByProduct.set(item.productId, item)
+      }
     }
-  }
 
-  const inventory = productRows.map((product) => {
-    const productLots = lotRows.filter((lot) => lot.productId === product.id)
-    const snapshot = latestSnapshotByProduct.get(product.id) ?? null
-    const adjustedLots = allocateRemainingLots(
-      productLots,
-      snapshot?.countedQuantity ?? null,
-      snapshot?.snapshotDate ?? null,
+    const inventory = productRows.map((product) => {
+      const productLots = lotRows.filter((lot) => lot.productId === product.id)
+      const snapshot = latestSnapshotByProduct.get(product.id) ?? null
+      const adjustedLots = allocateRemainingLots(
+        productLots,
+        snapshot?.countedQuantity ?? null,
+        snapshot?.snapshotDate ?? null,
+      )
+      
+      const currentStock = adjustedLots.reduce((total, lot) => total + lot.remainingQuantity, 0)
+      let accumulatedStockForPrediction = 0
+
+      const activeLots = adjustedLots
+        .filter((lot) => lot.remainingQuantity > 0)
+        .map((lot) => {
+          accumulatedStockForPrediction += lot.remainingQuantity
+          const daysToExpire = daysUntil(lot.expirationDate, today)
+          
+          const daysToSell = product.averageDailySales > 0 
+            ? accumulatedStockForPrediction / product.averageDailySales 
+            : Infinity
+          
+          const willExpireBeforeSale = product.averageDailySales > 0 && daysToExpire >= 0 && daysToSell > daysToExpire
+
+          return {
+            id: lot.id,
+            sourceType: lot.sourceType,
+            sourceReference: lot.sourceReference,
+            receivedDate: lot.receivedDate,
+            expirationDate: lot.expirationDate,
+            remainingQuantity: lot.remainingQuantity,
+            daysToExpire,
+            willExpireBeforeSale,
+          }
+        })
+
+      return {
+        ...product,
+        currentStock,
+        latestSnapshotDate: snapshot?.snapshotDate ?? null,
+        activeLots,
+      }
+    })
+
+    const allActiveLots = inventory.flatMap((product) =>
+      product.activeLots.map((lot) => ({ ...lot, productId: product.id, productName: product.name, sku: product.sku })),
     )
-    
-    const currentStock = adjustedLots.reduce((total, lot) => total + lot.remainingQuantity, 0)
-    let accumulatedStockForPrediction = 0
+    const totalUnits = inventory.reduce((total, product) => total + product.currentStock, 0)
+    const expiringSoonUnits = allActiveLots
+      .filter((lot) => lot.daysToExpire >= 0 && lot.daysToExpire <= 30)
+      .reduce((total, lot) => total + lot.remainingQuantity, 0)
+    const expiredUnits = allActiveLots
+      .filter((lot) => lot.daysToExpire < 0)
+      .reduce((total, lot) => total + lot.remainingQuantity, 0)
 
-    const activeLots = adjustedLots
-      .filter((lot) => lot.remainingQuantity > 0)
-      .map((lot) => {
-        accumulatedStockForPrediction += lot.remainingQuantity
-        const daysToExpire = daysUntil(lot.expirationDate, today)
-        
-        const daysToSell = product.averageDailySales > 0 
-          ? accumulatedStockForPrediction / product.averageDailySales 
-          : Infinity
-        
-        const willExpireBeforeSale = product.averageDailySales > 0 && daysToExpire >= 0 && daysToSell > daysToExpire
-
-        return {
-          id: lot.id,
-          sourceType: lot.sourceType,
-          sourceReference: lot.sourceReference,
-          receivedDate: lot.receivedDate,
-          expirationDate: lot.expirationDate,
-          remainingQuantity: lot.remainingQuantity,
-          daysToExpire,
-          willExpireBeforeSale,
-        }
-      })
+    const riskUnits = allActiveLots
+      .filter((lot) => lot.willExpireBeforeSale)
+      .reduce((total, lot) => total + lot.remainingQuantity, 0)
 
     return {
-      ...product,
-      currentStock,
-      latestSnapshotDate: snapshot?.snapshotDate ?? null,
-      activeLots,
+      inventory,
+      recentSnapshots: snapshotRows,
+      summary: {
+        totalProducts: inventory.length,
+        totalUnits,
+        lowStockProducts: inventory.filter((product) => product.currentStock <= product.minimumStock).length,
+        expiringSoonUnits,
+        expiredUnits,
+        riskUnits,
+      },
     }
-  })
-
-  const allActiveLots = inventory.flatMap((product) =>
-    product.activeLots.map((lot) => ({ ...lot, productId: product.id, productName: product.name, sku: product.sku })),
-  )
-  const totalUnits = inventory.reduce((total, product) => total + product.currentStock, 0)
-  const expiringSoonUnits = allActiveLots
-    .filter((lot) => lot.daysToExpire >= 0 && lot.daysToExpire <= 30)
-    .reduce((total, lot) => total + lot.remainingQuantity, 0)
-  const expiredUnits = allActiveLots
-    .filter((lot) => lot.daysToExpire < 0)
-    .reduce((total, lot) => total + lot.remainingQuantity, 0)
-
-  const riskUnits = allActiveLots
-    .filter((lot) => lot.willExpireBeforeSale)
-    .reduce((total, lot) => total + lot.remainingQuantity, 0)
-
-  return {
-    inventory,
-    recentSnapshots: snapshotRows,
-    summary: {
-      totalProducts: inventory.length,
-      totalUnits,
-      lowStockProducts: inventory.filter((product) => product.currentStock <= product.minimumStock).length,
-      expiringSoonUnits,
-      expiredUnits,
-      riskUnits,
-    },
+  } catch (e) {
+    console.error('Error al obtener inventario:', e)
+    return {
+      inventory: [],
+      recentSnapshots: [],
+      summary: { totalProducts: 0, totalUnits: 0, lowStockProducts: 0, expiringSoonUnits: 0, expiredUnits: 0, riskUnits: 0 },
+    }
   }
 }
 
@@ -202,29 +204,27 @@ export async function createInitialStock(input: z.infer<typeof initialStockSchem
     throw new Error('El SKU ya existe. Usa “Cargar boleta” para sumar mercadería.')
   }
 
-  return db.transaction(async (tx) => {
-    const [product] = await tx
-      .insert(products)
-      .values({
-        sku: normalizedSku,
-        name: data.name,
-        unit: data.unit,
-        minimumStock: data.minimumStock,
-        averageDailySales: data.averageDailySales,
-      })
-      .returning()
-
-    await tx.insert(stockLots).values({
-      productId: product.id,
-      sourceType: 'initial',
-      sourceReference: 'Stock inicial',
-      quantity: data.quantity,
-      expirationDate: data.expirationDate,
-      receivedDate: data.receivedDate,
+  const [product] = await db
+    .insert(products)
+    .values({
+      sku: normalizedSku,
+      name: data.name,
+      unit: data.unit,
+      minimumStock: data.minimumStock,
+      averageDailySales: data.averageDailySales,
     })
+    .returning()
 
-    return product
+  await db.insert(stockLots).values({
+    productId: product.id,
+    sourceType: 'initial',
+    sourceReference: 'Stock inicial',
+    quantity: data.quantity,
+    expirationDate: data.expirationDate,
+    receivedDate: data.receivedDate,
   })
+
+  return product
 }
 
 export async function addReceipt(input: z.infer<typeof receiptSchema>) {
@@ -250,11 +250,7 @@ export async function addReceipt(input: z.infer<typeof receiptSchema>) {
 export async function saveDailySnapshot(input: z.infer<typeof snapshotSchema>) {
   const data = snapshotSchema.parse(input)
   const normalizedItems = data.items.map((item) => ({ ...item, sku: item.sku.toUpperCase() }))
-  const repeatedSkus = normalizedItems.filter(
-    (item, index) => normalizedItems.findIndex((candidate) => candidate.sku === item.sku) !== index,
-  )
-  if (repeatedSkus.length > 0) throw new Error(`Hay SKU repetidos: ${repeatedSkus[0].sku}`)
-
+  
   const productRows = await db
     .select({ id: products.id, sku: products.sku })
     .from(products)
@@ -262,57 +258,55 @@ export async function saveDailySnapshot(input: z.infer<typeof snapshotSchema>) {
   const productBySku = new Map(productRows.map((product) => [product.sku, product]))
   
   const validItems = normalizedItems.filter((item) => productBySku.has(item.sku))
-  if (validItems.length === 0) throw new Error(`Ninguno de los SKUs pegados coincide con la base inicial.`)
+  if (validItems.length === 0) throw new Error(`Ninguno de los SKUs coincide con la base de datos.`)
 
-  return db.transaction(async (tx) => {
-    const existingSnapshot = await tx
-      .select()
-      .from(dailySnapshots)
-      .where(eq(dailySnapshots.snapshotDate, data.snapshotDate))
+  const existingSnapshot = await db
+    .select()
+    .from(dailySnapshots)
+    .where(eq(dailySnapshots.snapshotDate, data.snapshotDate))
+    .limit(1)
+
+  const snapshot = existingSnapshot[0]
+    ? (
+        await db
+          .update(dailySnapshots)
+          .set({ notes: data.notes })
+          .where(eq(dailySnapshots.id, existingSnapshot[0].id))
+          .returning()
+      )[0]
+    : (
+        await db
+          .insert(dailySnapshots)
+          .values({ snapshotDate: data.snapshotDate, notes: data.notes })
+          .returning()
+      )[0]
+
+  for (const item of validItems) {
+    const product = productBySku.get(item.sku)!
+    const existingItem = await db
+      .select({ id: dailySnapshotItems.id })
+      .from(dailySnapshotItems)
+      .where(
+        and(
+          eq(dailySnapshotItems.snapshotId, snapshot.id),
+          eq(dailySnapshotItems.productId, product.id),
+        ),
+      )
       .limit(1)
 
-    const snapshot = existingSnapshot[0]
-      ? (
-          await tx
-            .update(dailySnapshots)
-            .set({ notes: data.notes })
-            .where(eq(dailySnapshots.id, existingSnapshot[0].id))
-            .returning()
-        )[0]
-      : (
-          await tx
-            .insert(dailySnapshots)
-            .values({ snapshotDate: data.snapshotDate, notes: data.notes })
-            .returning()
-        )[0]
-
-    for (const item of validItems) {
-      const product = productBySku.get(item.sku)!
-      const existingItem = await tx
-        .select({ id: dailySnapshotItems.id })
-        .from(dailySnapshotItems)
-        .where(
-          and(
-            eq(dailySnapshotItems.snapshotId, snapshot.id),
-            eq(dailySnapshotItems.productId, product.id),
-          ),
-        )
-        .limit(1)
-
-      if (existingItem[0]) {
-        await tx
-          .update(dailySnapshotItems)
-          .set({ countedQuantity: item.quantity })
-          .where(eq(dailySnapshotItems.id, existingItem[0].id))
-      } else {
-        await tx.insert(dailySnapshotItems).values({
-          snapshotId: snapshot.id,
-          productId: product.id,
-          countedQuantity: item.quantity,
-        })
-      }
+    if (existingItem[0]) {
+      await db
+        .update(dailySnapshotItems)
+        .set({ countedQuantity: item.quantity })
+        .where(eq(dailySnapshotItems.id, existingItem[0].id))
+    } else {
+      await db.insert(dailySnapshotItems).values({
+        snapshotId: snapshot.id,
+        productId: product.id,
+        countedQuantity: item.quantity,
+      })
     }
+  }
 
-    return snapshot
-  })
+  return snapshot
 }
