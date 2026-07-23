@@ -1,3 +1,5 @@
+import '../../styles.css'
+
 import { HeadContent, Scripts, createRootRoute } from '@tanstack/react-router'
 
 
