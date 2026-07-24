@@ -64,8 +64,17 @@ export async function createInitialStock(payload: any) {
   const skuUpper = payload.sku.toUpperCase();
 
   const check = await sql`SELECT id FROM products WHERE sku = ${skuUpper}`;
+  const avgSales = parseQuantity(payload.averageDailySales, 0);
+
   if (check.length > 0) {
-    throw new Error(`El SKU "${skuUpper}" ya existe en la Nube.`);
+    // Si el SKU ya existe, actualiza el nombre y la Venta Promedio diaria
+    await sql`
+      UPDATE products 
+      SET average_daily_sales = ${avgSales},
+          name = ${payload.name || ''}
+      WHERE sku = ${skuUpper}
+    `;
+    return { id: String(check[0].id), sku: skuUpper };
   }
 
   const productId = String(payload.id || crypto.randomUUID());
@@ -75,7 +84,7 @@ export async function createInitialStock(payload: any) {
 
   await sql`
     INSERT INTO products (id, sku, name, unit, minimum_stock, average_daily_sales, initial_quantity, total_out)
-    VALUES (${productId}, ${skuUpper}, ${payload.name}, ${payload.unit || 'unidades'}, ${parseQuantity(payload.minimumStock)}, ${parseQuantity(payload.averageDailySales)}, 0, 0)
+    VALUES (${productId}, ${skuUpper}, ${payload.name}, ${payload.unit || 'unidades'}, ${parseQuantity(payload.minimumStock)}, ${avgSales}, 0, 0)
   `;
 
   await sql`
@@ -109,20 +118,19 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
 
   for (const lot of newLots) {
     const pId = String(lot.productId);
-    const countedQuantity = parseQuantity(lot.quantity); // Stock real contado
+    const countedQuantity = parseQuantity(lot.quantity);
 
-    // 1. Consultar el total de entradas y la salida actual
-    const existingLots = await sql`SELECT quantity, source_type FROM lots WHERE product_id = ${pId}`;
+    // 1. Consultar el total de entradas cargadas y salidas actuales
+    const existingLots = await sql`SELECT quantity FROM lots WHERE product_id = ${pId}`;
     const totalIn = existingLots.reduce((acc: number, l: any) => acc + parseQuantity(l.quantity), 0);
     
     const prodCheck = await sql`SELECT total_out FROM products WHERE id = ${pId}`;
     const currentTotalOut = prodCheck.length > 0 ? parseQuantity(prodCheck[0].total_out) : 0;
     const currentStockAvailable = totalIn - currentTotalOut;
 
-    // 2. La diferencia ajustada (Delta) que se guardará en la historia
+    // 2. Calcular la diferencia real (delta) para guardar en el historial
     const delta = countedQuantity - currentStockAvailable;
 
-    // 3. Ajustamos total_out en la tabla products
     let newTotalOut = totalIn - countedQuantity;
     if (newTotalOut < 0) newTotalOut = 0;
 
@@ -132,7 +140,9 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
       WHERE id = ${pId}
     `;
 
-    // 4. Registrar en la tabla de lotes con la cantidad real ajustada (diferencia delta + / -)
+    // 3. Crear el registro en el Historial con la diferencia + / -
+    const actionLabel = delta < 0 ? `Venta/Salida (${Math.abs(delta)} unid)` : `Ajuste Positivo (+${delta} unid)`;
+
     await sql`
       INSERT INTO lots (id, product_id, sku, source_type, source_reference, quantity, expiration_date, received_date)
       VALUES (
@@ -140,7 +150,7 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
         ${pId}, 
         ${lot.sku || ''}, 
         'adjustment', 
-        ${'Ajuste Conteo (Stock final: ' + countedQuantity + ')'}, 
+        ${actionLabel}, 
         ${delta}, 
         ${lot.expirationDate || null}, 
         ${lot.receivedDate || new Date().toISOString().slice(0, 10)}
