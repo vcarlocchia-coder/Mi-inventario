@@ -2,6 +2,7 @@ import { neon } from '@neondatabase/serverless';
 
 const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Mantené tu URL activa
 
+
 function getSql() {
   const connectionString = 
     NEON_URL || 
@@ -67,7 +68,6 @@ export async function createInitialStock(payload: any) {
   const avgSales = parseQuantity(payload.averageDailySales, 0);
 
   if (check.length > 0) {
-    // Si el SKU ya existe, actualiza el nombre y la Venta Promedio diaria
     await sql`
       UPDATE products 
       SET average_daily_sales = ${avgSales},
@@ -95,6 +95,20 @@ export async function createInitialStock(payload: any) {
   return { id: productId, sku: skuUpper };
 }
 
+export async function updateAverageSalesBatch(items: { sku: string; averageDailySales: number }[]) {
+  const sql = getSql();
+  for (const item of items) {
+    const skuUpper = item.sku.toUpperCase();
+    const avgSales = parseQuantity(item.averageDailySales, 0);
+    await sql`
+      UPDATE products 
+      SET average_daily_sales = ${avgSales}
+      WHERE sku = ${skuUpper}
+    `;
+  }
+  return true;
+}
+
 export async function addReceipt(payload: any) {
   const sql = getSql();
   const lotId = String(crypto.randomUUID());
@@ -120,7 +134,6 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
     const pId = String(lot.productId);
     const countedQuantity = parseQuantity(lot.quantity);
 
-    // 1. Consultar el total de entradas cargadas y salidas actuales
     const existingLots = await sql`SELECT quantity FROM lots WHERE product_id = ${pId}`;
     const totalIn = existingLots.reduce((acc: number, l: any) => acc + parseQuantity(l.quantity), 0);
     
@@ -128,7 +141,6 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
     const currentTotalOut = prodCheck.length > 0 ? parseQuantity(prodCheck[0].total_out) : 0;
     const currentStockAvailable = totalIn - currentTotalOut;
 
-    // 2. Calcular la diferencia real (delta) para guardar en el historial
     const delta = countedQuantity - currentStockAvailable;
 
     let newTotalOut = totalIn - countedQuantity;
@@ -140,7 +152,6 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
       WHERE id = ${pId}
     `;
 
-    // 3. Crear el registro en el Historial con la diferencia + / -
     const actionLabel = delta < 0 ? `Venta/Salida (${Math.abs(delta)} unid)` : `Ajuste Positivo (+${delta} unid)`;
 
     await sql`
