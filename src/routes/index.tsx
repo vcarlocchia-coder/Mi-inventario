@@ -1,11 +1,11 @@
 import { createFileRoute } from '@tanstack/react-router'
 import {
   AlertTriangle, Boxes, CalendarClock, ClipboardPaste, FilePlus2, PackageOpen,
-  ReceiptText, Search, ShieldCheck, Sparkles, Table, Trash2, History, ListFilter, Lock, LogOut, Filter, Calendar
+  ReceiptText, Search, ShieldCheck, Sparkles, Table, Trash2, History, ListFilter, Lock, LogOut, Filter, Calendar, TrendingUp
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
-  addReceipt, createInitialStock, getInventoryDashboard, saveDailySnapshot, syncAdjustments, clearAllDatabase
+  addReceipt, createInitialStock, getInventoryDashboard, saveDailySnapshot, syncAdjustments, clearAllDatabase, updateAverageSalesBatch
 } from '../../inventory.functions'
 
 export const Route = createFileRoute('/')({ component: InventoryApp })
@@ -311,7 +311,8 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
               {message && (<div className={`form-message ${message.type}`}><span>{message.text}</span></div>)}
               
               {actionMode === 'initial' && (
-                <InitialForm disabled={isSubmitting} onSubmit={(payload: any) => runMutation(() => createInitialStock(payload), 'Producto guardado.')}
+                <InitialForm disabled={isSubmitting} 
+                  onSubmit={(payload: any) => runMutation(() => createInitialStock(payload), 'Producto guardado.')}
                   onBatchSubmit={async (items: any[]) => {
                     setIsSubmitting(true); setMessage(null);
                     try {
@@ -321,7 +322,18 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                     } catch (error: any) {
                       setMessage({ type: 'error', text: error.message || 'Error al importar Excel.' })
                     } finally { setIsSubmitting(false) }
-                  }} />
+                  }}
+                  onAvgSalesSubmit={async (items: any[]) => {
+                    setIsSubmitting(true); setMessage(null);
+                    try {
+                      await updateAverageSalesBatch(items);
+                      await loadData();
+                      setMessage({ type: 'success', text: `Venta promedio actualizada para ${items.length} productos (Stock Intacto).` });
+                    } catch (error: any) {
+                      setMessage({ type: 'error', text: error.message || 'Error al actualizar ventas promedio.' });
+                    } finally { setIsSubmitting(false); }
+                  }}
+                />
               )}
 
               {actionMode === 'receipt' && (
@@ -383,13 +395,16 @@ function StatCard({ icon, label, value, detail, tone, onClick, active }: any) {
   )
 }
 
-function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
-  const [isExcel, setIsExcel] = useState(false); const [excelText, setExcelText] = useState('');
+function InitialForm({ disabled, onSubmit, onBatchSubmit, onAvgSalesSubmit }: any) {
+  const [subMode, setSubMode] = useState<'single' | 'excel' | 'avgOnly'>('single');
+  const [excelText, setExcelText] = useState('');
+
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault(); const form = new FormData(e.currentTarget); const qty = Number(form.get('quantity'));
     await onSubmit({ sku: String(form.get('sku')), name: String(form.get('name')), unit: String(form.get('unit')), minimumStock: Number(form.get('minimumStock')), averageDailySales: Number(form.get('averageDailySales')), quantity: qty, expirationDate: String(form.get('expirationDate')), receivedDate: todayIso() });
     e.currentTarget.reset();
   }
+
   async function handleBatch() {
     const lines = excelText.split(/\r?\n/).map(l => l.trim()).filter(Boolean); const items = [];
     for (const line of lines) {
@@ -405,11 +420,50 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
     if (items.length === 0) return alert('Copiar: SKU | Nombre | Cantidad | Vencimiento | Vta Promedio');
     await onBatchSubmit(items); setExcelText('');
   }
+
+  async function handleAvgOnlyBatch() {
+    const lines = excelText.split(/\r?\n/).map(l => l.trim()).filter(Boolean); const items = [];
+    for (const line of lines) {
+      const parts = line.split('\t').map(p => p.trim());
+      if (parts.length >= 2) {
+        const sku = parts[0];
+        const avgDailySales = parseFloat(parts[1].trim().replace(',', '.')) || 0;
+        items.push({ sku, averageDailySales: avgDailySales });
+      }
+    }
+    if (items.length === 0) return alert('Copiar solo 2 columnas de Excel: SKU | Venta Promedio');
+    await onAvgSalesSubmit(items); setExcelText('');
+  }
+
   return (
     <div className="action-form">
       <h2>Cargar / Actualizar productos</h2>
-      <div style={{ display: 'flex', gap: '8px', margin: '12px 0' }}><button type="button" className={`mini-action ${!isExcel ? 'active' : ''}`} onClick={() => setIsExcel(false)}>Uno por uno</button><button type="button" className={`mini-action ${isExcel ? 'active' : ''}`} onClick={() => setIsExcel(true)}><Table size={14} /> Excel</button></div>
-      {isExcel ? (<div><textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej: HAR-01  Harina  100  2026-12-01  2.5" /><button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Importar / Actualizar</button></div>) : (<form onSubmit={(e) => void handleSubmit(e)}><div className="field-pair"><label className="field"><span>SKU</span><input name="sku" required /></label><label className="field"><span>Unidad</span><input name="unit" defaultValue="unidades" required /></label></div><label className="field"><span>Nombre</span><input name="name" required /></label><div className="field-pair"><label className="field"><span>Cant. inicial</span><input type="number" name="quantity" required /></label><label className="field"><span>Venta prom.</span><input type="number" name="averageDailySales" defaultValue="0" step="0.1" required /></label></div><label className="field"><span>Vencimiento</span><input type="date" name="expirationDate" required /></label><button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>Crear</button></form>)}
+      <div style={{ display: 'flex', gap: '6px', margin: '12px 0', flexWrap: 'wrap' }}>
+        <button type="button" className={`mini-action ${subMode === 'single' ? 'active' : ''}`} onClick={() => setSubMode('single')}>Uno por uno</button>
+        <button type="button" className={`mini-action ${subMode === 'excel' ? 'active' : ''}`} onClick={() => setSubMode('excel')}><Table size={14} /> Excel Todo</button>
+        <button type="button" className={`mini-action ${subMode === 'avgOnly' ? 'active' : ''}`} onClick={() => setSubMode('avgOnly')}><TrendingUp size={14} /> Solo Vta Prom.</button>
+      </div>
+
+      {subMode === 'avgOnly' ? (
+        <div>
+          <p style={{ fontSize: '12px', color: '#64748b', marginBottom: '8px' }}>Pega 2 columnas de Excel: <strong>SKU</strong> | <strong>Venta Promedio</strong>. No modifica el stock actual.</p>
+          <textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej:&#10;HAR-01  3.5&#10;ACE-02  1.2" />
+          <button className="submit-button" onClick={() => void handleAvgOnlyBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Actualizar Solo Ventas Promedio</button>
+        </div>
+      ) : subMode === 'excel' ? (
+        <div>
+          <textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej: HAR-01  Harina  100  2026-12-01  2.5" />
+          <button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Importar Todo</button>
+        </div>
+      ) : (
+        <form onSubmit={(e) => void handleSubmit(e)}>
+          <div className="field-pair"><label className="field"><span>SKU</span><input name="sku" required /></label><label className="field"><span>Unidad</span><input name="unit" defaultValue="unidades" required /></label></div>
+          <label className="field"><span>Nombre</span><input name="name" required /></label>
+          <div className="field-pair"><label className="field"><span>Cant. inicial</span><input type="number" name="quantity" required /></label><label className="field"><span>Venta prom.</span><input type="number" name="averageDailySales" defaultValue="0" step="0.1" required /></label></div>
+          <label className="field"><span>Vencimiento</span><input type="date" name="expirationDate" required /></label>
+          <button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>Crear</button>
+        </form>
+      )}
     </div>
   )
 }
