@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import {
   AlertTriangle, Boxes, CalendarClock, ClipboardPaste, FilePlus2, PackageOpen,
-  ReceiptText, Search, ShieldCheck, Sparkles, Table, Trash2, History, ListFilter, Lock, LogOut, Filter
+  ReceiptText, Search, ShieldCheck, Sparkles, Table, Trash2, History, ListFilter, Lock, LogOut, Filter, Calendar
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
@@ -76,6 +76,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   const [actionMode, setActionMode] = useState<ActionMode>('initial')
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
   const [historyTypeFilter, setHistoryTypeFilter] = useState<HistoryTypeFilter>('all')
+  const [historyDateFilter, setHistoryDateFilter] = useState('')
   const [viewTab, setViewTab] = useState<ViewTab>('inventory')
   const [search, setSearch] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -170,10 +171,17 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       raw = raw.filter((lot: any) => lot.sourceType === historyTypeFilter);
     }
 
+    if (historyDateFilter) {
+      raw = raw.filter((lot: any) => {
+        const rDate = lot.receivedDate || '';
+        return rDate.startsWith(historyDateFilter);
+      });
+    }
+
     const query = search.trim().toLowerCase();
     if (!query) return raw;
     return raw.filter((lot: any) => lot.sku.toLowerCase().includes(query) || lot.name.toLowerCase().includes(query) || (lot.reference && lot.reference.toLowerCase().includes(query)));
-  }, [data.rawLots, data.rawProducts, search, historyTypeFilter]);
+  }, [data.rawLots, data.rawProducts, search, historyTypeFilter, historyDateFilter]);
 
   async function runMutation(task: () => Promise<unknown>, successText: string) {
     setMessage(null); setIsSubmitting(true);
@@ -222,12 +230,19 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
               </div>
 
               {viewTab === 'history' && (
-                <div style={{ padding: '12px 20px', borderBottom: '1px solid #f1f5f9', display: 'flex', gap: '8px', alignItems: 'center', background: '#fafafa' }}>
-                  <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}><Filter size={14} /> Tipo:</span>
-                  <button className={`mini-action ${historyTypeFilter === 'all' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('all')}>Todos</button>
-                  <button className={`mini-action ${historyTypeFilter === 'initial' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('initial')}>Stock Inicial</button>
-                  <button className={`mini-action ${historyTypeFilter === 'receipt' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('receipt')}>Boletas</button>
-                  <button className={`mini-action ${historyTypeFilter === 'adjustment' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('adjustment')}>Conteo / Ajuste</button>
+                <div style={{ padding: '12px 20px', borderBottom: '1px solid #f1f5f9', display: 'flex', gap: '12px', alignItems: 'center', background: '#fafafa', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}><Filter size={14} /> Tipo:</span>
+                    <button className={`mini-action ${historyTypeFilter === 'all' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('all')}>Todos</button>
+                    <button className={`mini-action ${historyTypeFilter === 'initial' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('initial')}>Stock Inicial</button>
+                    <button className={`mini-action ${historyTypeFilter === 'receipt' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('receipt')}>Boletas</button>
+                    <button className={`mini-action ${historyTypeFilter === 'adjustment' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('adjustment')}>Ventas / Salidas</button>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginLeft: 'auto' }}>
+                    <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}><Calendar size={14} /> Fecha:</span>
+                    <input type="date" value={historyDateFilter} onChange={(e) => setHistoryDateFilter(e.target.value)} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '13px' }} />
+                    {historyDateFilter && (<button onClick={() => setHistoryDateFilter('')} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}>Limpiar</button>)}
+                  </div>
                 </div>
               )}
 
@@ -258,6 +273,8 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                       const displayQty = qty > 0 ? `+${numberFormatter.format(qty)}` : numberFormatter.format(qty);
                       const color = isNeg ? '#dc2626' : '#059669';
 
+                      const typeLabel = lot.sourceType === 'initial' ? 'STOCK INICIAL' : (lot.sourceType === 'receipt' ? 'BOLETA' : 'VENTA / SALIDA');
+
                       return (
                         <article className="product-row" key={lot.id || idx}>
                           <div className="product-identity">
@@ -266,7 +283,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                               <h3>{lot.name}</h3>
                               <p style={{ color: '#666', fontSize: '13px' }}>
                                 <span style={{ fontWeight: 600, color: '#0f172a' }}>
-                                  [{lot.sourceType === 'initial' ? 'STOCK INICIAL' : (lot.sourceType === 'receipt' ? 'BOLETA' : 'CONTEO')}]
+                                  [{typeLabel}]
                                 </span> {lot.reference} | 📅 {formatDate(lot.receivedDate || todayIso())} {lot.expirationDate ? `| 🗓️ Vence: ${formatDate(lot.expirationDate)}` : ''}
                               </p>
                             </div>
@@ -278,7 +295,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                         </article>
                       );
                     })
-                  ) : (<div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}><h3>Historial vacío para esta categoría</h3></div>)}
+                  ) : (<div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}><h3>Historial vacío para esta búsqueda</h3></div>)}
                 </div>
               )}
             </section>
@@ -300,7 +317,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                     try {
                       for (const item of items) { await createInitialStock(item); }
                       await loadData(); 
-                      setMessage({ type: 'success', text: `${items.length} productos cargados.` })
+                      setMessage({ type: 'success', text: `${items.length} productos procesados/actualizados.` })
                     } catch (error: any) {
                       setMessage({ type: 'error', text: error.message || 'Error al importar Excel.' })
                     } finally { setIsSubmitting(false) }
@@ -336,7 +353,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                             sku: prod.sku,
                             quantity: item.realQuantity,
                             expirationDate: item.expirationDate || prod.activeExpDate || null,
-                            reference: 'CONTEO-REAL',
+                            reference: 'VENTA/AJUSTE DE CONTEO',
                             receivedDate: todayIso()
                           });
                         }
@@ -344,9 +361,9 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
 
                       await syncAdjustments([], newLots);
                       await loadData();
-                      setMessage({ type: 'success', text: `Stock ajustado para ${items.length} productos.` });
+                      setMessage({ type: 'success', text: `Stock y ventas registradas para ${items.length} productos.` });
                     } catch (error: any) {
-                      setMessage({ type: 'error', text: error.message || 'Error al ajustar stock.' });
+                      setMessage({ type: 'error', text: error.message || 'Error al registrar ventas.' });
                     } finally { setIsSubmitting(false); }
                   }} />
               )}
@@ -390,9 +407,9 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit }: any) {
   }
   return (
     <div className="action-form">
-      <h2>Cargar productos</h2>
+      <h2>Cargar / Actualizar productos</h2>
       <div style={{ display: 'flex', gap: '8px', margin: '12px 0' }}><button type="button" className={`mini-action ${!isExcel ? 'active' : ''}`} onClick={() => setIsExcel(false)}>Uno por uno</button><button type="button" className={`mini-action ${isExcel ? 'active' : ''}`} onClick={() => setIsExcel(true)}><Table size={14} /> Excel</button></div>
-      {isExcel ? (<div><textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej: HAR-01  Harina  100  2026-12-01  2.5" /><button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Importar</button></div>) : (<form onSubmit={(e) => void handleSubmit(e)}><div className="field-pair"><label className="field"><span>SKU</span><input name="sku" required /></label><label className="field"><span>Unidad</span><input name="unit" defaultValue="unidades" required /></label></div><label className="field"><span>Nombre</span><input name="name" required /></label><div className="field-pair"><label className="field"><span>Cant. inicial</span><input type="number" name="quantity" required /></label><label className="field"><span>Venta prom.</span><input type="number" name="averageDailySales" defaultValue="0" step="0.1" required /></label></div><label className="field"><span>Vencimiento</span><input type="date" name="expirationDate" required /></label><button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>Crear</button></form>)}
+      {isExcel ? (<div><textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej: HAR-01  Harina  100  2026-12-01  2.5" /><button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Importar / Actualizar</button></div>) : (<form onSubmit={(e) => void handleSubmit(e)}><div className="field-pair"><label className="field"><span>SKU</span><input name="sku" required /></label><label className="field"><span>Unidad</span><input name="unit" defaultValue="unidades" required /></label></div><label className="field"><span>Nombre</span><input name="name" required /></label><div className="field-pair"><label className="field"><span>Cant. inicial</span><input type="number" name="quantity" required /></label><label className="field"><span>Venta prom.</span><input type="number" name="averageDailySales" defaultValue="0" step="0.1" required /></label></div><label className="field"><span>Vencimiento</span><input type="date" name="expirationDate" required /></label><button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>Crear</button></form>)}
     </div>
   )
 }
@@ -453,9 +470,9 @@ function SnapshotForm({ disabled, onSubmit, onBatchUpdate, enrichedInventory }: 
   }
   return (
     <div className="action-form">
-      <h2>Ajuste de Stock</h2>
+      <h2>Ventas / Ajuste por Conteo</h2>
       <div style={{ display: 'flex', gap: '8px', margin: '12px 0' }}><button type="button" className={`mini-action ${!isExcel ? 'active' : ''}`} onClick={() => setIsExcel(false)}>Nota</button><button type="button" className={`mini-action ${isExcel ? 'active' : ''}`} onClick={() => setIsExcel(true)}><Table size={14} /> Excel</button></div>
-      {isExcel ? (<div><textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej: HAR-01  120  (Opcional: 2026-12-01)" /><button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Pisar Stock</button></div>) : (<form onSubmit={(e) => void handleSubmit(e)}><label className="field"><span>Obs.</span><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} /></label><button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>Guardar</button></form>)}
+      {isExcel ? (<div><textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej: HAR-01  120  (Opcional: 2026-12-01)" /><button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Pisar Stock y Registrar Ventas</button></div>) : (<form onSubmit={(e) => void handleSubmit(e)}><label className="field"><span>Obs.</span><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} /></label><button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>Guardar</button></form>)}
     </div>
   )
 }
