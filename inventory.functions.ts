@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 
-const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Asegurate de mantener tu enlace real de Neon
+const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Mantené tu URL activa
 
 function getSql() {
   const connectionString = 
@@ -109,24 +109,30 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
 
   for (const lot of newLots) {
     const pId = String(lot.productId);
-    const countedQuantity = parseQuantity(lot.quantity); // El número real del conteo
+    const countedQuantity = parseQuantity(lot.quantity); // Stock real contado
 
-    // 1. Consultamos todas las entradas registradas hasta el momento
-    const existingLots = await sql`SELECT quantity FROM lots WHERE product_id = ${pId}`;
+    // 1. Consultar el total de entradas y la salida actual
+    const existingLots = await sql`SELECT quantity, source_type FROM lots WHERE product_id = ${pId}`;
     const totalIn = existingLots.reduce((acc: number, l: any) => acc + parseQuantity(l.quantity), 0);
+    
+    const prodCheck = await sql`SELECT total_out FROM products WHERE id = ${pId}`;
+    const currentTotalOut = prodCheck.length > 0 ? parseQuantity(prodCheck[0].total_out) : 0;
+    const currentStockAvailable = totalIn - currentTotalOut;
 
-    // 2. Calculamos las salidas exactas (totalOut) necesarias para dejar el stock en el valor contado
-    let calculatedTotalOut = totalIn - countedQuantity;
-    if (calculatedTotalOut < 0) calculatedTotalOut = 0;
+    // 2. La diferencia ajustada (Delta) que se guardará en la historia
+    const delta = countedQuantity - currentStockAvailable;
 
-    // 3. Actualizamos la salida en la tabla de productos (sin borrar ningún lote previo)
+    // 3. Ajustamos total_out en la tabla products
+    let newTotalOut = totalIn - countedQuantity;
+    if (newTotalOut < 0) newTotalOut = 0;
+
     await sql`
       UPDATE products 
-      SET total_out = ${calculatedTotalOut}
+      SET total_out = ${newTotalOut}
       WHERE id = ${pId}
     `;
 
-    // 4. Guardamos una entrada de registro en el Historial para auditar el Conteo
+    // 4. Registrar en la tabla de lotes con la cantidad real ajustada (diferencia delta + / -)
     await sql`
       INSERT INTO lots (id, product_id, sku, source_type, source_reference, quantity, expiration_date, received_date)
       VALUES (
@@ -134,8 +140,8 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
         ${pId}, 
         ${lot.sku || ''}, 
         'adjustment', 
-        ${'Conteo registrado: ' + countedQuantity + ' unid'}, 
-        0, 
+        ${'Ajuste Conteo (Stock final: ' + countedQuantity + ')'}, 
+        ${delta}, 
         ${lot.expirationDate || null}, 
         ${lot.receivedDate || new Date().toISOString().slice(0, 10)}
       )
