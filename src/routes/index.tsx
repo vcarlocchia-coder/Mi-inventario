@@ -1,8 +1,7 @@
-
 import { createFileRoute } from '@tanstack/react-router'
 import {
   AlertTriangle, Boxes, CalendarClock, ClipboardPaste, FilePlus2, PackageOpen,
-  ReceiptText, Search, ShieldCheck, Sparkles, Table, Trash2, History, ListFilter, Lock, LogOut
+  ReceiptText, Search, ShieldCheck, Sparkles, Table, Trash2, History, ListFilter, Lock, LogOut, Filter
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
@@ -13,6 +12,7 @@ export const Route = createFileRoute('/')({ component: InventoryApp })
 
 type ActionMode = 'initial' | 'receipt' | 'snapshot'
 type FilterMode = 'all' | 'expiringSoon' | 'expired' | 'risk'
+type HistoryTypeFilter = 'all' | 'initial' | 'receipt' | 'adjustment'
 type ViewTab = 'inventory' | 'history'
 type Role = 'admin' | 'viewer'
 
@@ -75,6 +75,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   const [loading, setLoading] = useState(true)
   const [actionMode, setActionMode] = useState<ActionMode>('initial')
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
+  const [historyTypeFilter, setHistoryTypeFilter] = useState<HistoryTypeFilter>('all')
   const [viewTab, setViewTab] = useState<ViewTab>('inventory')
   const [search, setSearch] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -160,14 +161,19 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   }, [enrichedInventory]);
 
   const historyData = useMemo(() => {
-    const raw = (data.rawLots || []).map((lot: any) => {
+    let raw = (data.rawLots || []).map((lot: any) => {
       const prod = (data.rawProducts || []).find((p: any) => p.id === lot.productId || p.sku === lot.sku)
       return { ...lot, sku: prod?.sku || lot.sku || 'Desconocido', name: prod?.name || 'Producto eliminado' }
-    }).reverse()
+    }).reverse();
+
+    if (historyTypeFilter !== 'all') {
+      raw = raw.filter((lot: any) => lot.sourceType === historyTypeFilter);
+    }
+
     const query = search.trim().toLowerCase();
     if (!query) return raw;
     return raw.filter((lot: any) => lot.sku.toLowerCase().includes(query) || lot.name.toLowerCase().includes(query) || (lot.reference && lot.reference.toLowerCase().includes(query)));
-  }, [data.rawLots, data.rawProducts, search])
+  }, [data.rawLots, data.rawProducts, search, historyTypeFilter]);
 
   async function runMutation(task: () => Promise<unknown>, successText: string) {
     setMessage(null); setIsSubmitting(true);
@@ -215,6 +221,16 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                 </div>
               </div>
 
+              {viewTab === 'history' && (
+                <div style={{ padding: '12px 20px', borderBottom: '1px solid #f1f5f9', display: 'flex', gap: '8px', alignItems: 'center', background: '#fafafa' }}>
+                  <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}><Filter size={14} /> Tipo:</span>
+                  <button className={`mini-action ${historyTypeFilter === 'all' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('all')}>Todos</button>
+                  <button className={`mini-action ${historyTypeFilter === 'initial' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('initial')}>Stock Inicial</button>
+                  <button className={`mini-action ${historyTypeFilter === 'receipt' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('receipt')}>Boletas</button>
+                  <button className={`mini-action ${historyTypeFilter === 'adjustment' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('adjustment')}>Conteo / Ajuste</button>
+                </div>
+              )}
+
               {loading ? (<div style={{ padding: '32px', textAlign: 'center' }}>Cargando datos...</div>) 
               : viewTab === 'inventory' ? (
                 finalInventory.length > 0 ? (
@@ -236,19 +252,33 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
               ) : (
                 <div className="inventory-list">
                   {historyData.length > 0 ? (
-                    historyData.map((lot: any, idx: number) => (
-                      <article className="product-row" key={lot.id || idx}>
-                        <div className="product-identity">
-                          <span className="sku-tag" style={{ background: '#eef2ff', color: '#4f46e5' }}>{lot.sku}</span>
-                          <div>
-                            <h3>{lot.name}</h3>
-                            <p style={{ color: '#666', fontSize: '13px' }}><span style={{ fontWeight: 600, color: '#059669' }}>Ref: {lot.reference}</span> | 📅 Carga: {formatDate(lot.receivedDate || lot.createdAt || todayIso())} | 🗓️ Vence: {lot.expirationDate ? formatDate(lot.expirationDate) : 'Sin fecha'}</p>
+                    historyData.map((lot: any, idx: number) => {
+                      const qty = lot.quantity || 0;
+                      const isNeg = qty < 0;
+                      const displayQty = qty > 0 ? `+${numberFormatter.format(qty)}` : numberFormatter.format(qty);
+                      const color = isNeg ? '#dc2626' : '#059669';
+
+                      return (
+                        <article className="product-row" key={lot.id || idx}>
+                          <div className="product-identity">
+                            <span className="sku-tag" style={{ background: '#eef2ff', color: '#4f46e5' }}>{lot.sku}</span>
+                            <div>
+                              <h3>{lot.name}</h3>
+                              <p style={{ color: '#666', fontSize: '13px' }}>
+                                <span style={{ fontWeight: 600, color: '#0f172a' }}>
+                                  [{lot.sourceType === 'initial' ? 'STOCK INICIAL' : (lot.sourceType === 'receipt' ? 'BOLETA' : 'CONTEO')}]
+                                </span> {lot.reference} | 📅 {formatDate(lot.receivedDate || todayIso())} {lot.expirationDate ? `| 🗓️ Vence: ${formatDate(lot.expirationDate)}` : ''}
+                              </p>
+                            </div>
                           </div>
-                        </div>
-                        <div className="stock-number"><strong style={{ color: '#059669' }}>+{numberFormatter.format(lot.quantity || 0)}</strong><span>unid</span></div>
-                      </article>
-                    ))
-                  ) : (<div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}><h3>Historial vacío</h3></div>)}
+                          <div className="stock-number">
+                            <strong style={{ color }}>{displayQty}</strong>
+                            <span>unid</span>
+                          </div>
+                        </article>
+                      );
+                    })
+                  ) : (<div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}><h3>Historial vacío para esta categoría</h3></div>)}
                 </div>
               )}
             </section>
