@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import {
   AlertTriangle, Boxes, CalendarClock, ClipboardPaste, FilePlus2, PackageOpen,
-  ReceiptText, Search, ShieldCheck, Sparkles, Table, Trash2, History, ListFilter, Lock, LogOut, Filter, Calendar, TrendingUp, Edit3, Check, X
+  ReceiptText, Search, ShieldCheck, Sparkles, Table, Trash2, History, ListFilter, Lock, LogOut, Filter, Calendar, TrendingUp, Edit3, Check, X, Download
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
@@ -193,6 +193,27 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     finally { setIsSubmitting(false); }
   }
 
+  // FUNCIÓN PARA DESCARGAR EXCEL (CSV)
+  const handleExportCSV = () => {
+    const headers = ['SKU', 'Nombre', 'Stock Actual', 'Vencimiento Activo'];
+    const rows = finalInventory.map((p: any) => [
+      p.sku,
+      `"${p.name}"`, // comillas para evitar problemas con comas en los nombres
+      p.currentStock,
+      p.activeExpDate ? p.activeExpDate : 'Sin fecha'
+    ]);
+    
+    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `Vencimientos_${todayIso()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <main className="app-shell">
       <div className="grid-glow" />
@@ -228,6 +249,12 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                 </div>
                 <div className="inventory-tools" style={{ display: 'flex', gap: '8px' }}>
                   <label className="search-box"><Search size={17} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar..." /></label>
+                  
+                  {/* Botón para descargar Excel (Visible para todos) */}
+                  <button onClick={handleExportCSV} style={{ background: '#f8fafc', border: '1px solid #cbd5e1', color: '#334155', padding: '0 12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}>
+                    <Download size={15} /> Descargar Excel
+                  </button>
+
                   {role === 'admin' && (<button onClick={handleClearAll} style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', padding: '0 12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}><Trash2 size={15} /> Vaciar Todo</button>)}
                 </div>
               </div>
