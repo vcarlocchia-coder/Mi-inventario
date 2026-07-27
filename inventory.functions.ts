@@ -2,6 +2,7 @@ import { neon } from '@neondatabase/serverless';
 
 const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Mantené tu URL activa
 
+
 function getSql() {
   const connectionString = 
     NEON_URL || 
@@ -133,25 +134,20 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
     const pId = String(lot.productId);
     const countedQuantity = parseQuantity(lot.quantity);
 
-    // 1. Obtener entradas (Sumamos SOLO los lotes positivos, exactamente igual que la pantalla)
     const existingLots = await sql`SELECT quantity FROM lots WHERE product_id = ${pId}`;
     const totalIn = existingLots.reduce((acc: number, l: any) => {
       const q = parseQuantity(l.quantity);
       return q > 0 ? acc + q : acc;
     }, 0);
     
-    // 2. Obtener salidas actuales y calcular stock disponible actual
     const prodCheck = await sql`SELECT total_out FROM products WHERE id = ${pId}`;
     const currentTotalOut = prodCheck.length > 0 ? parseQuantity(prodCheck[0].total_out) : 0;
     const currentStockAvailable = totalIn - currentTotalOut;
 
-    // 3. Diferencia real a registrar
     const delta = countedQuantity - currentStockAvailable;
 
-    if (delta === 0) continue; // Si contaste lo mismo que hay, no hace nada
+    if (delta === 0) continue; 
 
-    // 4. Recalcular total_out para que el stock de exacto matemáticamente
-    // Si la diferencia es positiva, se agregará un lote nuevo que subirá totalIn
     const futureTotalIn = delta > 0 ? totalIn + delta : totalIn;
     let newTotalOut = futureTotalIn - countedQuantity;
     if (newTotalOut < 0) newTotalOut = 0;
@@ -189,6 +185,39 @@ export async function updateLotRecord(lotId: string, payload: any) {
         source_reference = ${payload.reference || ''}
     WHERE id = ${lotId}
   `;
+  return true;
+}
+
+export async function deleteLotRecord(lotId: string, productId: string) {
+  const sql = getSql();
+  const check = await sql`SELECT quantity FROM lots WHERE id = ${lotId}`;
+  if (check.length === 0) return false;
+  
+  const qty = parseQuantity(check[0].quantity);
+  await sql`DELETE FROM lots WHERE id = ${lotId}`;
+  
+  if (qty < 0) {
+    await sql`
+      UPDATE products 
+      SET total_out = GREATEST(total_out - ${Math.abs(qty)}, 0) 
+      WHERE id = ${productId}
+    `;
+  }
+  return true;
+}
+
+// NUEVA FUNCIÓN PARA BORRAR UNA LISTA MASIVA
+export async function deleteLotRecordsBatch(items: { lotId: string, productId: string }[]) {
+  for (const item of items) {
+    await deleteLotRecord(item.lotId, item.productId);
+  }
+  return true;
+}
+
+export async function deleteProduct(productId: string) {
+  const sql = getSql();
+  await sql`DELETE FROM lots WHERE product_id = ${productId}`;
+  await sql`DELETE FROM products WHERE id = ${productId}`;
   return true;
 }
 
