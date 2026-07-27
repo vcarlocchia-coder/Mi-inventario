@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import {
   AlertTriangle, Boxes, CalendarClock, ClipboardPaste, FilePlus2, PackageOpen,
-  ReceiptText, Search, ShieldCheck, Sparkles, Table, Trash2, History, ListFilter, Lock, LogOut, Filter, Calendar, TrendingUp, Edit3, Check, X, Download
+  ReceiptText, Search, ShieldCheck, Sparkles, Table, Trash2, History, ListFilter, Lock, LogOut, Filter, Calendar, TrendingUp, Edit3, Check, X, Download, ArrowUpDown
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
@@ -15,6 +15,10 @@ type FilterMode = 'all' | 'expiringSoon' | 'expired' | 'risk'
 type HistoryTypeFilter = 'all' | 'initial' | 'receipt' | 'adjustment'
 type ViewTab = 'inventory' | 'history'
 type Role = 'admin' | 'viewer'
+
+// Nuevos tipos para el ordenamiento
+type SortBy = 'sku' | 'name' | 'stock' | 'expiration'
+type SortOrder = 'asc' | 'desc'
 
 const dateFormatter = new Intl.DateTimeFormat('es-CL', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' })
 const numberFormatter = new Intl.NumberFormat('es-CL')
@@ -85,6 +89,10 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   const [editLotId, setEditLotId] = useState<string | null>(null)
   const [editLotData, setEditLotData] = useState({ expirationDate: '', reference: '' })
 
+  // Estados de ordenamiento
+  const [sortBy, setSortBy] = useState<SortBy>('sku')
+  const [sortOrder, setSortOrder] = useState<SortOrder>('asc')
+
   const loadData = async () => {
     try {
       const result = await getInventoryDashboard()
@@ -144,7 +152,9 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
 
   const finalInventory = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return enrichedInventory.filter((p: any) => {
+    
+    // 1. Filtrado
+    const filtered = enrichedInventory.filter((p: any) => {
       if (query && !p.name.toLowerCase().includes(query) && !String(p.sku).toLowerCase().includes(query)) return false;
       if (filterMode === 'all') return true;
       if (filterMode === 'expired') return p.isExpired;
@@ -152,7 +162,30 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       if (filterMode === 'risk') return p.isRisk;
       return true;
     });
-  }, [enrichedInventory, search, filterMode]);
+
+    // 2. Ordenamiento
+    return filtered.sort((a: any, b: any) => {
+      let valA, valB;
+      
+      if (sortBy === 'sku') {
+        valA = String(a.sku).toLowerCase(); valB = String(b.sku).toLowerCase();
+      } else if (sortBy === 'name') {
+        valA = String(a.name).toLowerCase(); valB = String(b.name).toLowerCase();
+      } else if (sortBy === 'stock') {
+        valA = a.currentStock; valB = b.currentStock;
+      } else if (sortBy === 'expiration') {
+        // Los productos sin fecha van al final independientemente del orden
+        const farFuture = sortOrder === 'asc' ? Infinity : -Infinity;
+        valA = a.activeExpDate ? new Date(a.activeExpDate).getTime() : farFuture;
+        valB = b.activeExpDate ? new Date(b.activeExpDate).getTime() : farFuture;
+      }
+
+      if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
+      if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+  }, [enrichedInventory, search, filterMode, sortBy, sortOrder]);
 
   const dashboardStats = useMemo(() => {
     let totalUnits = 0, expiringSoon = 0, expired = 0, risk = 0;
@@ -241,16 +274,40 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
         <div className="workspace" style={{ display: 'flex', gap: '24px' }}>
           <div className="main-column" style={{ flex: role === 'viewer' ? '1 1 100%' : '1' }}>
             <section className="panel inventory-panel">
-              <div className="panel-heading">
+              <div className="panel-heading" style={{ flexWrap: 'wrap', gap: '16px' }}>
                 <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                   <button onClick={() => setViewTab('inventory')} style={{ background: 'none', border: 'none', fontSize: '20px', fontWeight: viewTab === 'inventory' ? 700 : 400, color: viewTab === 'inventory' ? '#111' : '#666', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}><ListFilter size={20} /> Inventario</button>
                   <button onClick={() => setViewTab('history')} style={{ background: 'none', border: 'none', fontSize: '20px', fontWeight: viewTab === 'history' ? 700 : 400, color: viewTab === 'history' ? '#111' : '#666', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}><History size={20} /> Historial</button>
                 </div>
-                <div className="inventory-tools" style={{ display: 'flex', gap: '8px' }}>
+                
+                <div className="inventory-tools" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                   <label className="search-box"><Search size={17} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar..." /></label>
                   
+                  {viewTab === 'inventory' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: '#f8fafc', padding: '0 8px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                      <ArrowUpDown size={15} color="#64748b"/>
+                      <select
+                        value={`${sortBy}-${sortOrder}`}
+                        onChange={(e) => {
+                          const [newBy, newOrder] = e.target.value.split('-');
+                          setSortBy(newBy as SortBy);
+                          setSortOrder(newOrder as SortOrder);
+                        }}
+                        style={{ background: 'transparent', border: 'none', outline: 'none', fontSize: '13px', color: '#334155', cursor: 'pointer', padding: '6px 0' }}
+                      >
+                        <option value="sku-asc">SKU (A-Z)</option>
+                        <option value="sku-desc">SKU (Z-A)</option>
+                        <option value="name-asc">Nombre (A-Z)</option>
+                        <option value="stock-desc">Mayor Stock</option>
+                        <option value="stock-asc">Menor Stock</option>
+                        <option value="expiration-asc">Vence más pronto</option>
+                        <option value="expiration-desc">Vence más tarde</option>
+                      </select>
+                    </div>
+                  )}
+
                   <button onClick={handleExportCSV} style={{ background: '#f8fafc', border: '1px solid #cbd5e1', color: '#334155', padding: '0 12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}>
-                    <Download size={15} /> Descargar Excel
+                    <Download size={15} /> Exportar
                   </button>
 
                   {role === 'admin' && (<button onClick={handleClearAll} style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', padding: '0 12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}><Trash2 size={15} /> Vaciar Todo</button>)}
@@ -566,8 +623,6 @@ function ReceiptForm({ data, disabled, onSubmit, onBatchSubmit }: any) {
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault(); const product = data.rawProducts?.find((p: any) => String(p.sku).toLowerCase() === skuInput.trim().toLowerCase());
     if (!product) return alert(`El SKU no existe.`); const form = new FormData(e.currentTarget);
-    
-    // Tomamos la fecha elegida en pantalla (o la de hoy por defecto)
     const recDate = String(form.get('receivedDate') || todayIso());
     
     await onSubmit({ productId: product.id, reference: String(form.get('reference')), quantity: Number(form.get('quantity')), expirationDate: String(form.get('expirationDate')), receivedDate: recDate }); setSkuInput('');
@@ -583,7 +638,6 @@ function ReceiptForm({ data, disabled, onSubmit, onBatchSubmit }: any) {
            const quantity = parseFloat(parts[1].trim().replace(',', '.')) || 0; let expDate = parts[2];
            if (expDate.includes('/')) { const dp = expDate.split('/'); if (dp.length === 3) expDate = `${dp[2].length === 2 ? '20'+dp[2] : dp[2]}-${dp[1].padStart(2, '0')}-${dp[0].padStart(2, '0')}`; }
            
-           // Si se pega una 4ta columna, se usa como Fecha de Ingreso
            let recDate = parts[3] || todayIso();
            if (recDate.includes('/')) { const dp2 = recDate.split('/'); if (dp2.length === 3) recDate = `${dp2[2].length === 2 ? '20'+dp2[2] : dp2[2]}-${dp2[1].padStart(2, '0')}-${dp2[0].padStart(2, '0')}`; }
 
