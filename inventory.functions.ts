@@ -170,6 +170,19 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
   }
 }
 
+// NUEVA FUNCIÓN PARA EDITAR EL HISTORIAL
+export async function updateLotRecord(lotId: string, payload: any) {
+  const sql = getSql();
+  const expDate = payload.expirationDate || null;
+  await sql`
+    UPDATE lots 
+    SET expiration_date = ${expDate},
+        source_reference = ${payload.reference || ''}
+    WHERE id = ${lotId}
+  `;
+  return true;
+}
+
 export async function clearAllDatabase() {
   const sql = getSql();
   await sql`DELETE FROM lots`;
