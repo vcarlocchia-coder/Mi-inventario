@@ -3,6 +3,7 @@ import { neon } from '@neondatabase/serverless';
 const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Mantené tu URL activa
 
 
+
 function getSql() {
   const connectionString = 
     NEON_URL || 
@@ -84,7 +85,7 @@ export async function createInitialStock(payload: any) {
 
   await sql`
     INSERT INTO products (id, sku, name, unit, minimum_stock, average_daily_sales, initial_quantity, total_out)
-    VALUES (${productId}, ${skuUpper}, ${payload.name}, ${payload.unit || 'unidades'}, ${parseQuantity(payload.minimumStock)}, ${avgSales}, 0, 0)
+    VALUES (${productId}, ${skuUpper}, ${payload.name}, ${payload.unit || 'bultos'}, ${parseQuantity(payload.minimumStock)}, ${avgSales}, 0, 0)
   `;
 
   await sql`
@@ -158,7 +159,7 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
       WHERE id = ${pId}
     `;
 
-    const actionLabel = delta < 0 ? `Venta/Salida (${Math.abs(delta)} unid)` : `Ajuste Positivo (+${delta} unid)`;
+    const actionLabel = delta < 0 ? `Venta/Salida (${Math.abs(delta)} bultos)` : `Ajuste Positivo (+${delta} bultos)`;
 
     await sql`
       INSERT INTO lots (id, product_id, sku, source_type, source_reference, quantity, expiration_date, received_date)
@@ -206,7 +207,6 @@ export async function deleteLotRecord(lotId: string, productId: string) {
   return true;
 }
 
-// NUEVA FUNCIÓN PARA BORRAR UNA LISTA MASIVA
 export async function deleteLotRecordsBatch(items: { lotId: string, productId: string }[]) {
   for (const item of items) {
     await deleteLotRecord(item.lotId, item.productId);
