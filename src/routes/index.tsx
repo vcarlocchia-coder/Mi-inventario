@@ -1,11 +1,11 @@
 import { createFileRoute } from '@tanstack/react-router'
 import {
   AlertTriangle, Boxes, CalendarClock, ClipboardPaste, FilePlus2, PackageOpen,
-  ReceiptText, Search, ShieldCheck, Sparkles, Table, Trash2, History, ListFilter, Lock, LogOut, Filter, Calendar, TrendingUp
+  ReceiptText, Search, ShieldCheck, Sparkles, Table, Trash2, History, ListFilter, Lock, LogOut, Filter, Calendar, TrendingUp, Edit3, Check, X
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
-  addReceipt, createInitialStock, getInventoryDashboard, saveDailySnapshot, syncAdjustments, clearAllDatabase, updateAverageSalesBatch
+  addReceipt, createInitialStock, getInventoryDashboard, saveDailySnapshot, syncAdjustments, clearAllDatabase, updateAverageSalesBatch, updateLotRecord
 } from '../../inventory.functions'
 
 export const Route = createFileRoute('/')({ component: InventoryApp })
@@ -81,6 +81,10 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   const [search, setSearch] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  // Estados para editar el historial
+  const [editLotId, setEditLotId] = useState<string | null>(null)
+  const [editLotData, setEditLotData] = useState({ expirationDate: '', reference: '' })
 
   const loadData = async () => {
     try {
@@ -272,25 +276,52 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                       const isNeg = qty < 0;
                       const displayQty = qty > 0 ? `+${numberFormatter.format(qty)}` : numberFormatter.format(qty);
                       const color = isNeg ? '#dc2626' : '#059669';
-
                       const typeLabel = lot.sourceType === 'initial' ? 'STOCK INICIAL' : (lot.sourceType === 'receipt' ? 'BOLETA' : 'VENTA / SALIDA');
+                      const isEditing = editLotId === lot.id;
 
                       return (
                         <article className="product-row" key={lot.id || idx}>
-                          <div className="product-identity">
+                          <div className="product-identity" style={{ flex: 1 }}>
                             <span className="sku-tag" style={{ background: '#eef2ff', color: '#4f46e5' }}>{lot.sku}</span>
                             <div>
                               <h3>{lot.name}</h3>
-                              <p style={{ color: '#666', fontSize: '13px' }}>
-                                <span style={{ fontWeight: 600, color: '#0f172a' }}>
-                                  [{typeLabel}]
-                                </span> {lot.reference} | 📅 {formatDate(lot.receivedDate || todayIso())} {lot.expirationDate ? `| 🗓️ Vence: ${formatDate(lot.expirationDate)}` : ''}
-                              </p>
+                              {isEditing ? (
+                                <div style={{ display: 'flex', gap: '8px', marginTop: '6px', flexWrap: 'wrap' }}>
+                                  <label style={{ display: 'flex', flexDirection: 'column', fontSize: '11px', color: '#666' }}>Vencimiento
+                                    <input type="date" value={editLotData.expirationDate} onChange={e => setEditLotData({...editLotData, expirationDate: e.target.value})} style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px' }} />
+                                  </label>
+                                  <label style={{ display: 'flex', flexDirection: 'column', fontSize: '11px', color: '#666', flex: 1, minWidth: '150px' }}>Ref / Detalle
+                                    <input type="text" value={editLotData.reference} onChange={e => setEditLotData({...editLotData, reference: e.target.value})} style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px' }} />
+                                  </label>
+                                </div>
+                              ) : (
+                                <p style={{ color: '#666', fontSize: '13px' }}>
+                                  <span style={{ fontWeight: 600, color: '#0f172a' }}>[{typeLabel}]</span> {lot.reference} | 📅 {formatDate(lot.receivedDate || todayIso())} {lot.expirationDate ? `| 🗓️ Vence: ${formatDate(lot.expirationDate)}` : ''}
+                                </p>
+                              )}
                             </div>
                           </div>
-                          <div className="stock-number">
-                            <strong style={{ color }}>{displayQty}</strong>
-                            <span>unid</span>
+                          <div className="stock-number" style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                            <div style={{ textAlign: 'right' }}>
+                              <strong style={{ color }}>{displayQty}</strong>
+                              <span style={{ display: 'block', fontSize: '12px', color: '#64748b' }}>unid</span>
+                            </div>
+                            {role === 'admin' && (
+                              isEditing ? (
+                                <div style={{ display: 'flex', gap: '6px' }}>
+                                  <button onClick={async () => {
+                                    await runMutation(() => updateLotRecord(lot.id, editLotData), 'Historial corregido.');
+                                    setEditLotId(null);
+                                  }} style={{ background: '#10b981', color: 'white', border: 'none', padding: '6px', borderRadius: '6px', cursor: 'pointer' }} title="Guardar"><Check size={16} /></button>
+                                  <button onClick={() => setEditLotId(null)} style={{ background: '#ef4444', color: 'white', border: 'none', padding: '6px', borderRadius: '6px', cursor: 'pointer' }} title="Cancelar"><X size={16} /></button>
+                                </div>
+                              ) : (
+                                <button onClick={() => {
+                                  setEditLotId(lot.id);
+                                  setEditLotData({ expirationDate: lot.expirationDate || '', reference: lot.reference || '' });
+                                }} style={{ background: '#f1f5f9', border: '1px solid #e2e8f0', color: '#64748b', cursor: 'pointer', padding: '6px', borderRadius: '6px' }} title="Editar"><Edit3 size={15} /></button>
+                              )
+                            )}
                           </div>
                         </article>
                       );
@@ -328,7 +359,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                     try {
                       await updateAverageSalesBatch(items);
                       await loadData();
-                      setMessage({ type: 'success', text: `Venta promedio actualizada para ${items.length} productos (Stock Intacto).` });
+                      setMessage({ type: 'success', text: `Venta promedio actualizada para ${items.length} productos.` });
                     } catch (error: any) {
                       setMessage({ type: 'error', text: error.message || 'Error al actualizar ventas promedio.' });
                     } finally { setIsSubmitting(false); }
