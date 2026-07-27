@@ -2,7 +2,6 @@ import { neon } from '@neondatabase/serverless';
 
 const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Mantené tu URL activa
 
-
 function getSql() {
   const connectionString = 
     NEON_URL || 
@@ -134,16 +133,27 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
     const pId = String(lot.productId);
     const countedQuantity = parseQuantity(lot.quantity);
 
+    // 1. Obtener entradas (Sumamos SOLO los lotes positivos, exactamente igual que la pantalla)
     const existingLots = await sql`SELECT quantity FROM lots WHERE product_id = ${pId}`;
-    const totalIn = existingLots.reduce((acc: number, l: any) => acc + parseQuantity(l.quantity), 0);
+    const totalIn = existingLots.reduce((acc: number, l: any) => {
+      const q = parseQuantity(l.quantity);
+      return q > 0 ? acc + q : acc;
+    }, 0);
     
+    // 2. Obtener salidas actuales y calcular stock disponible actual
     const prodCheck = await sql`SELECT total_out FROM products WHERE id = ${pId}`;
     const currentTotalOut = prodCheck.length > 0 ? parseQuantity(prodCheck[0].total_out) : 0;
     const currentStockAvailable = totalIn - currentTotalOut;
 
+    // 3. Diferencia real a registrar
     const delta = countedQuantity - currentStockAvailable;
 
-    let newTotalOut = totalIn - countedQuantity;
+    if (delta === 0) continue; // Si contaste lo mismo que hay, no hace nada
+
+    // 4. Recalcular total_out para que el stock de exacto matemáticamente
+    // Si la diferencia es positiva, se agregará un lote nuevo que subirá totalIn
+    const futureTotalIn = delta > 0 ? totalIn + delta : totalIn;
+    let newTotalOut = futureTotalIn - countedQuantity;
     if (newTotalOut < 0) newTotalOut = 0;
 
     await sql`
@@ -170,7 +180,6 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
   }
 }
 
-// NUEVA FUNCIÓN PARA EDITAR EL HISTORIAL
 export async function updateLotRecord(lotId: string, payload: any) {
   const sql = getSql();
   const expDate = payload.expirationDate || null;
