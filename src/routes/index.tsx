@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
-  addReceipt, createInitialStock, getInventoryDashboard, saveDailySnapshot, syncAdjustments, clearAllDatabase, updateAverageSalesBatch, updateLotRecord
+  addReceipt, createInitialStock, getInventoryDashboard, saveDailySnapshot, syncAdjustments, clearAllDatabase, updateAverageSalesBatch, updateLotRecord, deleteLotRecord, deleteProduct, deleteLotRecordsBatch
 } from '../../inventory.functions'
 
 export const Route = createFileRoute('/')({ component: InventoryApp })
@@ -82,7 +82,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
-  // Estados para editar el historial
   const [editLotId, setEditLotId] = useState<string | null>(null)
   const [editLotData, setEditLotData] = useState({ expirationDate: '', reference: '' })
 
@@ -168,7 +167,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   const historyData = useMemo(() => {
     let raw = (data.rawLots || []).map((lot: any) => {
       const prod = (data.rawProducts || []).find((p: any) => p.id === lot.productId || p.sku === lot.sku)
-      return { ...lot, sku: prod?.sku || lot.sku || 'Desconocido', name: prod?.name || 'Producto eliminado' }
+      return { ...lot, sku: prod?.sku || lot.sku || 'Desconocido', name: prod?.name || 'Producto eliminado', productId: prod?.id || lot.productId }
     }).reverse();
 
     if (historyTypeFilter !== 'all') {
@@ -234,20 +233,36 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
               </div>
 
               {viewTab === 'history' && (
-                <div style={{ padding: '12px 20px', borderBottom: '1px solid #f1f5f9', display: 'flex', gap: '12px', alignItems: 'center', background: '#fafafa', flexWrap: 'wrap' }}>
-                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                    <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}><Filter size={14} /> Tipo:</span>
-                    <button className={`mini-action ${historyTypeFilter === 'all' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('all')}>Todos</button>
-                    <button className={`mini-action ${historyTypeFilter === 'initial' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('initial')}>Stock Inicial</button>
-                    <button className={`mini-action ${historyTypeFilter === 'receipt' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('receipt')}>Boletas</button>
-                    <button className={`mini-action ${historyTypeFilter === 'adjustment' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('adjustment')}>Ventas / Salidas</button>
+                <>
+                  <div style={{ padding: '12px 20px', borderBottom: '1px solid #f1f5f9', display: 'flex', gap: '12px', alignItems: 'center', background: '#fafafa', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}><Filter size={14} /> Tipo:</span>
+                      <button className={`mini-action ${historyTypeFilter === 'all' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('all')}>Todos</button>
+                      <button className={`mini-action ${historyTypeFilter === 'initial' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('initial')}>Stock Inicial</button>
+                      <button className={`mini-action ${historyTypeFilter === 'receipt' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('receipt')}>Boletas</button>
+                      <button className={`mini-action ${historyTypeFilter === 'adjustment' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('adjustment')}>Ventas / Salidas</button>
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginLeft: 'auto' }}>
+                      <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}><Calendar size={14} /> Fecha:</span>
+                      <input type="date" value={historyDateFilter} onChange={(e) => setHistoryDateFilter(e.target.value)} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '13px' }} />
+                      {historyDateFilter && (<button onClick={() => setHistoryDateFilter('')} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}>Limpiar</button>)}
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginLeft: 'auto' }}>
-                    <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}><Calendar size={14} /> Fecha:</span>
-                    <input type="date" value={historyDateFilter} onChange={(e) => setHistoryDateFilter(e.target.value)} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '13px' }} />
-                    {historyDateFilter && (<button onClick={() => setHistoryDateFilter('')} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}>Limpiar</button>)}
-                  </div>
-                </div>
+                  
+                  {role === 'admin' && historyData.length > 0 && (
+                    <div style={{ padding: '8px 20px', background: '#fff1f2', borderBottom: '1px solid #ffe4e6', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '13px', color: '#be123c', fontWeight: 600 }}>⚠️ Estás viendo una lista de {historyData.length} registros</span>
+                      <button onClick={async () => {
+                        if (confirm(`¿ATENCIÓN: Estás seguro de que querés ELIMINAR ESTOS ${historyData.length} REGISTROS visibles? El stock se revertirá automáticamente a como estaba antes de esta carga.`)) {
+                          const itemsToDel = historyData.map((l:any) => ({ lotId: l.id, productId: l.productId }));
+                          await runMutation(() => deleteLotRecordsBatch(itemsToDel), `Se eliminaron ${itemsToDel.length} registros y se ajustó el stock.`);
+                        }
+                      }} style={{ background: '#e11d48', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Trash2 size={15} /> Borrar todos los registros de esta lista
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
 
               {loading ? (<div style={{ padding: '32px', textAlign: 'center' }}>Cargando datos...</div>) 
@@ -263,7 +278,21 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                             <p>Venta prom: {product.avgSales}/día <span style={{ marginLeft: '12px', color: product.isExpired ? '#dc2626' : (product.isExpiringSoon ? '#d97706' : '#059669'), fontWeight: 600 }}>🗓️ Activo: {product.activeExpDate ? formatDate(product.activeExpDate) : 'Sin fecha'}</span></p>
                           </div>
                         </div>
-                        <div className="stock-number"><strong>{numberFormatter.format(product.currentStock || 0)}</strong><span>unid</span></div>
+                        <div className="stock-number" style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                          <div style={{ textAlign: 'right' }}>
+                            <strong>{numberFormatter.format(product.currentStock || 0)}</strong>
+                            <span style={{ display: 'block', fontSize: '12px', color: '#64748b' }}>unid</span>
+                          </div>
+                          {role === 'admin' && (
+                            <button onClick={async () => {
+                              if(confirm(`¿Seguro que querés ELIMINAR POR COMPLETO el producto ${product.sku} y todo su historial de la base de datos?`)) {
+                                await runMutation(() => deleteProduct(product.id), 'Producto eliminado correctamente.');
+                              }
+                            }} style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#ef4444', cursor: 'pointer', padding: '6px', borderRadius: '6px' }} title="Eliminar Producto Completo">
+                              <Trash2 size={16} />
+                            </button>
+                          )}
+                        </div>
                       </article>
                     ))}
                   </div>
@@ -316,10 +345,17 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                                   <button onClick={() => setEditLotId(null)} style={{ background: '#ef4444', color: 'white', border: 'none', padding: '6px', borderRadius: '6px', cursor: 'pointer' }} title="Cancelar"><X size={16} /></button>
                                 </div>
                               ) : (
-                                <button onClick={() => {
-                                  setEditLotId(lot.id);
-                                  setEditLotData({ expirationDate: lot.expirationDate || '', reference: lot.reference || '' });
-                                }} style={{ background: '#f1f5f9', border: '1px solid #e2e8f0', color: '#64748b', cursor: 'pointer', padding: '6px', borderRadius: '6px' }} title="Editar"><Edit3 size={15} /></button>
+                                <div style={{ display: 'flex', gap: '6px' }}>
+                                  <button onClick={() => {
+                                    setEditLotId(lot.id);
+                                    setEditLotData({ expirationDate: lot.expirationDate || '', reference: lot.reference || '' });
+                                  }} style={{ background: '#f1f5f9', border: '1px solid #e2e8f0', color: '#64748b', cursor: 'pointer', padding: '6px', borderRadius: '6px' }} title="Editar"><Edit3 size={15} /></button>
+                                  <button onClick={async () => {
+                                    if(confirm('¿Seguro que querés borrar este registro de la historia? El stock se recalculará automáticamente.')) {
+                                      await runMutation(() => deleteLotRecord(lot.id, lot.productId), 'Registro borrado y stock devuelto.');
+                                    }
+                                  }} style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#ef4444', cursor: 'pointer', padding: '6px', borderRadius: '6px' }} title="Borrar del Historial"><Trash2 size={15} /></button>
+                                </div>
                               )
                             )}
                           </div>
