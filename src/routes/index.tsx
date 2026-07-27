@@ -193,12 +193,11 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     finally { setIsSubmitting(false); }
   }
 
-  // FUNCIÓN PARA DESCARGAR EXCEL (CSV)
   const handleExportCSV = () => {
     const headers = ['SKU', 'Nombre', 'Stock Actual', 'Vencimiento Activo'];
     const rows = finalInventory.map((p: any) => [
       p.sku,
-      `"${p.name}"`, // comillas para evitar problemas con comas en los nombres
+      `"${p.name}"`, 
       p.currentStock,
       p.activeExpDate ? p.activeExpDate : 'Sin fecha'
     ]);
@@ -234,9 +233,9 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       <div className="page" id="top">
         <section className="stats-grid">
           <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(dashboardStats.totalUnits)} detail={`${dashboardStats.totalProducts} productos`} tone="ink" onClick={() => { setFilterMode('all'); setViewTab('inventory'); }} active={filterMode === 'all' && viewTab === 'inventory'} />
-          <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(dashboardStats.expiringSoon)} detail="unidades críticas" tone="amber" onClick={() => { setFilterMode('expiringSoon'); setViewTab('inventory'); }} active={filterMode === 'expiringSoon' && viewTab === 'inventory'} />
+          <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(dashboardStats.expiringSoon)} detail="bultos críticos" tone="amber" onClick={() => { setFilterMode('expiringSoon'); setViewTab('inventory'); }} active={filterMode === 'expiringSoon' && viewTab === 'inventory'} />
           <StatCard icon={<AlertTriangle />} label="Riesgo de merma" value={numberFormatter.format(dashboardStats.risk)} detail="vencerán antes" tone="rose" onClick={() => { setFilterMode('risk'); setViewTab('inventory'); }} active={filterMode === 'risk' && viewTab === 'inventory'} />
-          <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(dashboardStats.expired)} detail="unidades" tone="green" onClick={() => { setFilterMode('expired'); setViewTab('inventory'); }} active={filterMode === 'expired' && viewTab === 'inventory'} />
+          <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(dashboardStats.expired)} detail="bultos" tone="green" onClick={() => { setFilterMode('expired'); setViewTab('inventory'); }} active={filterMode === 'expired' && viewTab === 'inventory'} />
         </section>
 
         <div className="workspace" style={{ display: 'flex', gap: '24px' }}>
@@ -250,7 +249,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                 <div className="inventory-tools" style={{ display: 'flex', gap: '8px' }}>
                   <label className="search-box"><Search size={17} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar..." /></label>
                   
-                  {/* Botón para descargar Excel (Visible para todos) */}
                   <button onClick={handleExportCSV} style={{ background: '#f8fafc', border: '1px solid #cbd5e1', color: '#334155', padding: '0 12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}>
                     <Download size={15} /> Descargar Excel
                   </button>
@@ -308,7 +306,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                         <div className="stock-number" style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                           <div style={{ textAlign: 'right' }}>
                             <strong>{numberFormatter.format(product.currentStock || 0)}</strong>
-                            <span style={{ display: 'block', fontSize: '12px', color: '#64748b' }}>unid</span>
+                            <span style={{ display: 'block', fontSize: '12px', color: '#64748b' }}>bultos</span>
                           </div>
                           {role === 'admin' && (
                             <button onClick={async () => {
@@ -360,7 +358,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                           <div className="stock-number" style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                             <div style={{ textAlign: 'right' }}>
                               <strong style={{ color }}>{displayQty}</strong>
-                              <span style={{ display: 'block', fontSize: '12px', color: '#64748b' }}>unid</span>
+                              <span style={{ display: 'block', fontSize: '12px', color: '#64748b' }}>bultos</span>
                             </div>
                             {role === 'admin' && (
                               isEditing ? (
@@ -508,7 +506,7 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit, onAvgSalesSubmit }: an
         const quantity = parseFloat(rawQty.includes(',') && rawQty.includes('.') ? rawQty.replace(/\./g, '').replace(',', '.') : rawQty.replace(',', '.')) || 0;
         let expDate = parts[3]; if (expDate.includes('/')) { const dp = expDate.split('/'); if (dp.length === 3) expDate = `${dp[2].length === 2 ? '20'+dp[2] : dp[2]}-${dp[1].padStart(2, '0')}-${dp[0].padStart(2, '0')}`; }
         const avgDailySales = parts[4] ? parseFloat(parts[4].trim().replace(',', '.')) || 0 : 0;
-        items.push({ sku, name, quantity, expirationDate: expDate, minimumStock: 0, averageDailySales: avgDailySales, unit: 'unidades', receivedDate: todayIso() });
+        items.push({ sku, name, quantity, expirationDate: expDate, minimumStock: 0, averageDailySales: avgDailySales, unit: 'bultos', receivedDate: todayIso() });
       }
     }
     if (items.length === 0) return alert('Copiar: SKU | Nombre | Cantidad | Vencimiento | Vta Promedio');
@@ -551,7 +549,7 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit, onAvgSalesSubmit }: an
         </div>
       ) : (
         <form onSubmit={(e) => void handleSubmit(e)}>
-          <div className="field-pair"><label className="field"><span>SKU</span><input name="sku" required /></label><label className="field"><span>Unidad</span><input name="unit" defaultValue="unidades" required /></label></div>
+          <div className="field-pair"><label className="field"><span>SKU</span><input name="sku" required /></label><label className="field"><span>Unidad</span><input name="unit" defaultValue="bultos" required /></label></div>
           <label className="field"><span>Nombre</span><input name="name" required /></label>
           <div className="field-pair"><label className="field"><span>Cant. inicial</span><input type="number" name="quantity" required /></label><label className="field"><span>Venta prom.</span><input type="number" name="averageDailySales" defaultValue="0" step="0.1" required /></label></div>
           <label className="field"><span>Vencimiento</span><input type="date" name="expirationDate" required /></label>
