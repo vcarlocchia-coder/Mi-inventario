@@ -562,11 +562,17 @@ function InitialForm({ disabled, onSubmit, onBatchSubmit, onAvgSalesSubmit }: an
 
 function ReceiptForm({ data, disabled, onSubmit, onBatchSubmit }: any) {
   const [isExcel, setIsExcel] = useState(false); const [excelText, setExcelText] = useState(''); const [skuInput, setSkuInput] = useState('');
+  
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault(); const product = data.rawProducts?.find((p: any) => String(p.sku).toLowerCase() === skuInput.trim().toLowerCase());
     if (!product) return alert(`El SKU no existe.`); const form = new FormData(e.currentTarget);
-    await onSubmit({ productId: product.id, reference: String(form.get('reference')), quantity: Number(form.get('quantity')), expirationDate: String(form.get('expirationDate')), receivedDate: todayIso() }); setSkuInput('');
+    
+    // Tomamos la fecha elegida en pantalla (o la de hoy por defecto)
+    const recDate = String(form.get('receivedDate') || todayIso());
+    
+    await onSubmit({ productId: product.id, reference: String(form.get('reference')), quantity: Number(form.get('quantity')), expirationDate: String(form.get('expirationDate')), receivedDate: recDate }); setSkuInput('');
   }
+
   async function handleBatch() {
     const lines = excelText.split(/\r?\n/).map(l => l.trim()).filter(Boolean); const items = [];
     for (const line of lines) {
@@ -576,17 +582,41 @@ function ReceiptForm({ data, disabled, onSubmit, onBatchSubmit }: any) {
         if (product) {
            const quantity = parseFloat(parts[1].trim().replace(',', '.')) || 0; let expDate = parts[2];
            if (expDate.includes('/')) { const dp = expDate.split('/'); if (dp.length === 3) expDate = `${dp[2].length === 2 ? '20'+dp[2] : dp[2]}-${dp[1].padStart(2, '0')}-${dp[0].padStart(2, '0')}`; }
-           items.push({ productId: product.id, reference: 'CARGA-MASIVA', quantity, expirationDate: expDate, receivedDate: todayIso() });
+           
+           // Si se pega una 4ta columna, se usa como Fecha de Ingreso
+           let recDate = parts[3] || todayIso();
+           if (recDate.includes('/')) { const dp2 = recDate.split('/'); if (dp2.length === 3) recDate = `${dp2[2].length === 2 ? '20'+dp2[2] : dp2[2]}-${dp2[1].padStart(2, '0')}-${dp2[0].padStart(2, '0')}`; }
+
+           items.push({ productId: product.id, reference: 'CARGA-MASIVA', quantity, expirationDate: expDate, receivedDate: recDate });
         }
       }
     }
     if (items.length === 0) return alert('No se encontraron SKUs válidos.'); await onBatchSubmit(items); setExcelText('');
   }
+
   return (
     <div className="action-form">
       <h2>Cargar boleta</h2>
       <div style={{ display: 'flex', gap: '8px', margin: '12px 0' }}><button type="button" className={`mini-action ${!isExcel ? 'active' : ''}`} onClick={() => setIsExcel(false)}>Uno a uno</button><button type="button" className={`mini-action ${isExcel ? 'active' : ''}`} onClick={() => setIsExcel(true)}><Table size={14} /> Excel</button></div>
-      {isExcel ? (<div><textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej: HAR-01  50  2026-10-15" /><button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Ingresar Boletas</button></div>) : (<form onSubmit={(e) => void handleSubmit(e)}><label className="field"><span>SKU</span><input value={skuInput} onChange={(e) => setSkuInput(e.target.value)} required /></label><label className="field"><span>Ref/Boleta</span><input name="reference" required /></label><div className="field-pair"><label className="field"><span>Cant.</span><input type="number" name="quantity" required /></label><label className="field"><span>Vencimiento</span><input type="date" name="expirationDate" required /></label></div><button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>Sumar Stock</button></form>)}
+      {isExcel ? (
+        <div>
+          <textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej: HAR-01  50  2026-10-15  (Opcional Ingreso: 2026-07-24)" />
+          <button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Ingresar Boletas</button>
+        </div>
+      ) : (
+        <form onSubmit={(e) => void handleSubmit(e)}>
+          <label className="field"><span>SKU</span><input value={skuInput} onChange={(e) => setSkuInput(e.target.value)} required /></label>
+          <div className="field-pair">
+            <label className="field"><span>Ref/Boleta</span><input name="reference" required /></label>
+            <label className="field"><span>Fecha Ingreso</span><input type="date" name="receivedDate" defaultValue={todayIso()} required /></label>
+          </div>
+          <div className="field-pair">
+            <label className="field"><span>Cant.</span><input type="number" name="quantity" required /></label>
+            <label className="field"><span>Vencimiento</span><input type="date" name="expirationDate" required /></label>
+          </div>
+          <button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>Sumar Stock</button>
+        </form>
+      )}
     </div>
   )
 }
