@@ -127,24 +127,48 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       if (totalOut < 0) totalOut = 0;
       
       const currentStock = totalIn - totalOut;
-      let activeExpDate = null; let burned = totalOut;
+      
+      let burned = totalOut;
+      let goodStock = 0;
+      let expiredStock = 0;
+      let activeExpDate = null;
+      let firstExpiredDate = null;
+
       for (const b of batches) {
-        if (burned >= b.qty) burned -= b.qty;
-        else { activeExpDate = b.date === '2099-12-31' ? null : b.date; break; }
+        if (burned >= b.qty) {
+          burned -= b.qty;
+        } else {
+          const rem = b.qty - burned;
+          burned = 0;
+          
+          const bDate = b.date === '2099-12-31' ? null : b.date;
+          const isBatchExpired = bDate && new Date(`${bDate}T00:00:00Z`) < today;
+
+          if (isBatchExpired) {
+            expiredStock += rem;
+            if (!firstExpiredDate) firstExpiredDate = bDate;
+          } else {
+            goodStock += rem;
+            if (!activeExpDate) activeExpDate = bDate;
+          }
+        }
       }
 
       const avgSales = prodRaw.averageDailySales || 0;
-      let isExpired = false, isExpiringSoon = false, isRisk = false;
+      let isExpired = expiredStock > 0;
+      let isExpiringSoon = false, isRisk = false;
+
       if (activeExpDate) {
         const expD = new Date(`${activeExpDate}T00:00:00Z`);
-        if (expD < today) isExpired = true; else if (expD <= thirtyDays) isExpiringSoon = true;
-        if (avgSales > 0 && expD >= today) {
-          const daysToSell = currentStock / avgSales;
+        if (expD <= thirtyDays) isExpiringSoon = true;
+        if (avgSales > 0) {
+          const daysToSell = goodStock / avgSales;
           const daysToExpire = (expD.getTime() - today.getTime()) / 86400000;
           if (daysToSell > daysToExpire) isRisk = true;
         }
       }
-      return { ...prodRaw, currentStock, activeExpDate, avgSales, isExpired, isExpiringSoon, isRisk };
+      
+      return { ...prodRaw, currentStock, goodStock, expiredStock, activeExpDate, firstExpiredDate, avgSales, isExpired, isExpiringSoon, isRisk };
     });
   }, [data.rawProducts, data.rawLots]);
 
@@ -153,14 +177,16 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     
     const filtered = enrichedInventory.filter((p: any) => {
       if (query && !p.name.toLowerCase().includes(query) && !String(p.sku).toLowerCase().includes(query)) return false;
-      if (filterMode === 'all') return true;
-      if (filterMode === 'expired') return p.isExpired;
+      
+      if (filterMode === 'all') return p.goodStock > 0 || (p.currentStock === 0 && p.expiredStock === 0);
+      if (filterMode === 'expired') return p.expiredStock > 0;
       if (filterMode === 'expiringSoon') return p.isExpiringSoon;
       if (filterMode === 'risk') return p.isRisk;
       return true;
     });
 
     return filtered.sort((a: any, b: any) => {
+      const stockKey = filterMode === 'expired' ? 'expiredStock' : 'goodStock';
       let valA, valB;
       
       if (sortBy === 'sku') {
@@ -168,11 +194,12 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       } else if (sortBy === 'name') {
         valA = String(a.name).toLowerCase(); valB = String(b.name).toLowerCase();
       } else if (sortBy === 'stock') {
-        valA = a.currentStock; valB = b.currentStock;
+        valA = a[stockKey]; valB = b[stockKey];
       } else if (sortBy === 'expiration') {
+        const dateKey = filterMode === 'expired' ? 'firstExpiredDate' : 'activeExpDate';
         const farFuture = sortOrder === 'asc' ? Infinity : -Infinity;
-        valA = a.activeExpDate ? new Date(a.activeExpDate).getTime() : farFuture;
-        valB = b.activeExpDate ? new Date(b.activeExpDate).getTime() : farFuture;
+        valA = a[dateKey] ? new Date(a[dateKey]).getTime() : farFuture;
+        valB = b[dateKey] ? new Date(b[dateKey]).getTime() : farFuture;
       }
 
       if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
@@ -183,13 +210,15 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   }, [enrichedInventory, search, filterMode, sortBy, sortOrder]);
 
   const dashboardStats = useMemo(() => {
-    let totalUnits = 0, expiringSoon = 0, expired = 0, risk = 0;
+    let totalUnits = 0, expiringSoon = 0, expired = 0, risk = 0, activeProducts = 0;
     enrichedInventory.forEach((p: any) => {
-      totalUnits += p.currentStock;
-      if (p.isExpired) expired += p.currentStock; else if (p.isExpiringSoon) expiringSoon += p.currentStock;
-      if (p.isRisk) risk += p.currentStock;
+      totalUnits += p.goodStock;
+      expired += p.expiredStock;
+      if (p.isExpiringSoon) expiringSoon += p.goodStock;
+      if (p.isRisk) risk += p.goodStock;
+      if (p.goodStock > 0) activeProducts++;
     });
-    return { totalUnits, expiringSoon, expired, risk, totalProducts: enrichedInventory.length };
+    return { totalUnits, expiringSoon, expired, risk, activeProducts };
   }, [enrichedInventory]);
 
   const historyData = useMemo(() => {
@@ -222,11 +251,12 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   }
 
   const handleExportCSV = () => {
-    const headers = ['SKU', 'Nombre', 'Stock Actual', 'Vencimiento Activo'];
+    const headers = ['SKU', 'Nombre', 'Stock Bueno', 'Stock Vencido', 'Próximo Vto (Bueno)'];
     const rows = finalInventory.map((p: any) => [
       p.sku,
       `"${p.name}"`, 
-      p.currentStock,
+      p.goodStock,
+      p.expiredStock,
       p.activeExpDate ? p.activeExpDate : 'Sin fecha'
     ]);
     
@@ -235,7 +265,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `Vencimientos_${todayIso()}.csv`);
+    link.setAttribute('download', `Inventario_${todayIso()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -260,10 +290,10 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
 
       <div className="page" id="top">
         <section className="stats-grid">
-          <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(dashboardStats.totalUnits)} detail={`${dashboardStats.totalProducts} productos`} tone="ink" onClick={() => { setFilterMode('all'); setViewTab('inventory'); }} active={filterMode === 'all' && viewTab === 'inventory'} />
+          <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(dashboardStats.totalUnits)} detail={`${dashboardStats.activeProducts} productos activos`} tone="ink" onClick={() => { setFilterMode('all'); setViewTab('inventory'); }} active={filterMode === 'all' && viewTab === 'inventory'} />
           <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(dashboardStats.expiringSoon)} detail="bultos críticos" tone="amber" onClick={() => { setFilterMode('expiringSoon'); setViewTab('inventory'); }} active={filterMode === 'expiringSoon' && viewTab === 'inventory'} />
           <StatCard icon={<AlertTriangle />} label="Riesgo de merma" value={numberFormatter.format(dashboardStats.risk)} detail="vencerán antes" tone="rose" onClick={() => { setFilterMode('risk'); setViewTab('inventory'); }} active={filterMode === 'risk' && viewTab === 'inventory'} />
-          <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(dashboardStats.expired)} detail="bultos" tone="green" onClick={() => { setFilterMode('expired'); setViewTab('inventory'); }} active={filterMode === 'expired' && viewTab === 'inventory'} />
+          <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(dashboardStats.expired)} detail="bultos apartados" tone="green" onClick={() => { setFilterMode('expired'); setViewTab('inventory'); }} active={filterMode === 'expired' && viewTab === 'inventory'} />
         </section>
 
         <div className="workspace" style={{ display: 'flex', gap: '24px' }}>
@@ -346,32 +376,47 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
               : viewTab === 'inventory' ? (
                 finalInventory.length > 0 ? (
                   <div className="inventory-list">
-                    {finalInventory.map((product: any) => (
-                      <article className="product-row" key={product.id}>
-                        <div className="product-identity">
-                          <span className="sku-tag">{product.sku}</span>
-                          <div>
-                            <h3>{product.name}</h3>
-                            <p>Venta prom: {product.avgSales}/día <span style={{ marginLeft: '12px', color: product.isExpired ? '#dc2626' : (product.isExpiringSoon ? '#d97706' : '#059669'), fontWeight: 600 }}>🗓️ Activo: {product.activeExpDate ? formatDate(product.activeExpDate) : 'Sin fecha'}</span></p>
+                    {finalInventory.map((product: any) => {
+                      const isShowingExpired = filterMode === 'expired';
+                      const displayStock = isShowingExpired ? product.expiredStock : product.goodStock;
+
+                      return (
+                        <article className="product-row" key={product.id}>
+                          <div className="product-identity">
+                            <span className="sku-tag">{product.sku}</span>
+                            <div>
+                              <h3>{product.name}</h3>
+                              <p>
+                                Venta prom: {product.avgSales}/día 
+                                {isShowingExpired ? (
+                                  <span style={{ marginLeft: '12px', color: '#dc2626', fontWeight: 600 }}>⚠️ Venció: {product.firstExpiredDate ? formatDate(product.firstExpiredDate) : '...'}</span>
+                                ) : (
+                                  <span style={{ marginLeft: '12px', color: product.isExpiringSoon ? '#d97706' : '#059669', fontWeight: 600 }}>🗓️ Activo: {product.activeExpDate ? formatDate(product.activeExpDate) : 'Sin fecha'}</span>
+                                )}
+                                {!isShowingExpired && product.expiredStock > 0 && (
+                                  <span style={{ marginLeft: '8px', color: '#991b1b', background: '#ffe4e6', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 700 }} title="Están en la estantería pero ya vencieron">+{product.expiredStock} vencidos</span>
+                                )}
+                              </p>
+                            </div>
                           </div>
-                        </div>
-                        <div className="stock-number" style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                          <div style={{ textAlign: 'right' }}>
-                            <strong>{numberFormatter.format(product.currentStock || 0)}</strong>
-                            <span style={{ display: 'block', fontSize: '12px', color: '#64748b' }}>bultos</span>
+                          <div className="stock-number" style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                            <div style={{ textAlign: 'right' }}>
+                              <strong>{numberFormatter.format(displayStock || 0)}</strong>
+                              <span style={{ display: 'block', fontSize: '12px', color: '#64748b' }}>bultos</span>
+                            </div>
+                            {role === 'admin' && (
+                              <button onClick={async () => {
+                                if(confirm(`¿Seguro que querés ELIMINAR POR COMPLETO el producto ${product.sku} y todo su historial de la base de datos?`)) {
+                                  await runMutation(() => deleteProduct(product.id), 'Producto eliminado correctamente.');
+                                }
+                              }} style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#ef4444', cursor: 'pointer', padding: '6px', borderRadius: '6px' }} title="Eliminar Producto Completo">
+                                <Trash2 size={16} />
+                              </button>
+                            )}
                           </div>
-                          {role === 'admin' && (
-                            <button onClick={async () => {
-                              if(confirm(`¿Seguro que querés ELIMINAR POR COMPLETO el producto ${product.sku} y todo su historial de la base de datos?`)) {
-                                await runMutation(() => deleteProduct(product.id), 'Producto eliminado correctamente.');
-                              }
-                            }} style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#ef4444', cursor: 'pointer', padding: '6px', borderRadius: '6px' }} title="Eliminar Producto Completo">
-                              <Trash2 size={16} />
-                            </button>
-                          )}
-                        </div>
-                      </article>
-                    ))}
+                        </article>
+                      )
+                    })}
                   </div>
                 ) : (<div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}><h3>No hay resultados</h3></div>)
               ) : (
@@ -674,22 +719,24 @@ function ReceiptForm({ data, disabled, onSubmit, onBatchSubmit }: any) {
 }
 
 function SnapshotForm({ disabled, onSubmit, onBatchUpdate, enrichedInventory }: any) {
-  const [isExcel, setIsExcel] = useState(false); const [excelText, setExcelText] = useState(''); const [notes, setNotes] = useState('');
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) { e.preventDefault(); await onSubmit({ snapshotDate: todayIso(), notes }); setNotes(''); }
+  const [isExcel, setIsExcel] = useState(false); const [excelText, setExcelText] = useState(''); 
+  const [skuInput, setSkuInput] = useState(''); const [qtyInput, setQtyInput] = useState('');
+
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) { 
+    e.preventDefault(); 
+    if (!skuInput || !qtyInput) return alert('Completá el SKU y el total físico');
+    await onBatchUpdate([{ sku: skuInput, realQuantity: Number(qtyInput) }]);
+    setSkuInput(''); setQtyInput('');
+  }
+
   async function handleBatch() {
     const lines = excelText.split(/\r?\n/).map(l => l.trim()).filter(Boolean); const items = [];
     for (const line of lines) { 
       const parts = line.split('\t').map(p => p.trim()); 
       if (parts.length >= 2) {
-        let expDate = parts[2] || '';
-        if (expDate && expDate.includes('/')) { 
-          const dp = expDate.split('/'); 
-          if (dp.length === 3) expDate = `${dp[2].length === 2 ? '20'+dp[2] : dp[2]}-${dp[1].padStart(2, '0')}-${dp[0].padStart(2, '0')}`; 
-        }
         items.push({ 
           sku: parts[0], 
-          realQuantity: parseFloat(parts[1].trim().replace(',', '.')) || 0,
-          expirationDate: expDate
+          realQuantity: parseFloat(parts[1].trim().replace(',', '.')) || 0
         }); 
       }
     }
@@ -699,8 +746,20 @@ function SnapshotForm({ disabled, onSubmit, onBatchUpdate, enrichedInventory }: 
   return (
     <div className="action-form">
       <h2>Ventas / Ajuste por Conteo</h2>
-      <div style={{ display: 'flex', gap: '8px', margin: '12px 0' }}><button type="button" className={`mini-action ${!isExcel ? 'active' : ''}`} onClick={() => setIsExcel(false)}>Nota</button><button type="button" className={`mini-action ${isExcel ? 'active' : ''}`} onClick={() => setIsExcel(true)}><Table size={14} /> Excel</button></div>
-      {isExcel ? (<div><textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej: HAR-01  120  (Opcional: 2026-12-01)" /><button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Pisar Stock y Registrar Ventas</button></div>) : (<form onSubmit={(e) => void handleSubmit(e)}><label className="field"><span>Obs.</span><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} /></label><button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>Guardar</button></form>)}
+      <p style={{fontSize:'12px', color:'#64748b', marginBottom:'8px'}}>Cargá el total físico. Si el producto tiene bultos vencidos en la estantería, sumalos a la cuenta para que cuadre todo.</p>
+      <div style={{ display: 'flex', gap: '8px', margin: '12px 0' }}><button type="button" className={`mini-action ${!isExcel ? 'active' : ''}`} onClick={() => setIsExcel(false)}>Uno a uno</button><button type="button" className={`mini-action ${isExcel ? 'active' : ''}`} onClick={() => setIsExcel(true)}><Table size={14} /> Excel</button></div>
+      {isExcel ? (
+        <div>
+          <textarea rows={8} value={excelText} onChange={(e) => setExcelText(e.target.value)} placeholder="Ej: HAR-01  120" />
+          <button className="submit-button" onClick={() => void handleBatch()} disabled={disabled || !excelText.trim()} style={{ marginTop: '10px' }}>Pisar Stock y Registrar Ventas</button>
+        </div>
+      ) : (
+        <form onSubmit={(e) => void handleSubmit(e)}>
+          <label className="field"><span>SKU</span><input value={skuInput} onChange={(e) => setSkuInput(e.target.value)} required /></label>
+          <label className="field"><span>Total Físico</span><input type="number" step="any" value={qtyInput} onChange={(e) => setQtyInput(e.target.value)} required placeholder="Ej: 150" /></label>
+          <button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>Guardar Conteo</button>
+        </form>
+      )}
     </div>
   )
 }
