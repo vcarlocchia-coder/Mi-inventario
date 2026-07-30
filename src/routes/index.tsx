@@ -16,7 +16,6 @@ type HistoryTypeFilter = 'all' | 'initial' | 'receipt' | 'adjustment'
 type ViewTab = 'inventory' | 'history'
 type Role = 'admin' | 'viewer'
 
-// Nuevos tipos para el ordenamiento
 type SortBy = 'sku' | 'name' | 'stock' | 'expiration'
 type SortOrder = 'asc' | 'desc'
 
@@ -87,9 +86,8 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   const [editLotId, setEditLotId] = useState<string | null>(null)
-  const [editLotData, setEditLotData] = useState({ expirationDate: '', reference: '' })
+  const [editLotData, setEditLotData] = useState({ expirationDate: '', reference: '', quantity: '' })
 
-  // Estados de ordenamiento
   const [sortBy, setSortBy] = useState<SortBy>('sku')
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc')
 
@@ -153,7 +151,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   const finalInventory = useMemo(() => {
     const query = search.trim().toLowerCase();
     
-    // 1. Filtrado
     const filtered = enrichedInventory.filter((p: any) => {
       if (query && !p.name.toLowerCase().includes(query) && !String(p.sku).toLowerCase().includes(query)) return false;
       if (filterMode === 'all') return true;
@@ -163,7 +160,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       return true;
     });
 
-    // 2. Ordenamiento
     return filtered.sort((a: any, b: any) => {
       let valA, valB;
       
@@ -174,7 +170,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       } else if (sortBy === 'stock') {
         valA = a.currentStock; valB = b.currentStock;
       } else if (sortBy === 'expiration') {
-        // Los productos sin fecha van al final independientemente del orden
         const farFuture = sortOrder === 'asc' ? Infinity : -Infinity;
         valA = a.activeExpDate ? new Date(a.activeExpDate).getTime() : farFuture;
         valB = b.activeExpDate ? new Date(b.activeExpDate).getTime() : farFuture;
@@ -398,6 +393,9 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                               <h3>{lot.name}</h3>
                               {isEditing ? (
                                 <div style={{ display: 'flex', gap: '8px', marginTop: '6px', flexWrap: 'wrap' }}>
+                                  <label style={{ display: 'flex', flexDirection: 'column', fontSize: '11px', color: '#666', width: '70px' }}>Cant.
+                                    <input type="number" step="any" value={editLotData.quantity} onChange={e => setEditLotData({...editLotData, quantity: e.target.value})} style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px' }} />
+                                  </label>
                                   <label style={{ display: 'flex', flexDirection: 'column', fontSize: '11px', color: '#666' }}>Vencimiento
                                     <input type="date" value={editLotData.expirationDate} onChange={e => setEditLotData({...editLotData, expirationDate: e.target.value})} style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px' }} />
                                   </label>
@@ -430,7 +428,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                                 <div style={{ display: 'flex', gap: '6px' }}>
                                   <button onClick={() => {
                                     setEditLotId(lot.id);
-                                    setEditLotData({ expirationDate: lot.expirationDate || '', reference: lot.reference || '' });
+                                    setEditLotData({ expirationDate: lot.expirationDate || '', reference: lot.reference || '', quantity: String(lot.quantity || 0) });
                                   }} style={{ background: '#f1f5f9', border: '1px solid #e2e8f0', color: '#64748b', cursor: 'pointer', padding: '6px', borderRadius: '6px' }} title="Editar"><Edit3 size={15} /></button>
                                   <button onClick={async () => {
                                     if(confirm('¿Seguro que querés borrar este registro de la historia? El stock se recalculará automáticamente.')) {
