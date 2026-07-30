@@ -2,8 +2,6 @@ import { neon } from '@neondatabase/serverless';
 
 const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Mantené tu URL activa
 
-
-
 function getSql() {
   const connectionString = 
     NEON_URL || 
@@ -177,15 +175,41 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
   }
 }
 
+// FUNCIÓN ACTUALIZADA PARA PERMITIR EDITAR LA CANTIDAD
 export async function updateLotRecord(lotId: string, payload: any) {
   const sql = getSql();
+  
+  // 1. Obtener la cantidad anterior para saber la diferencia
+  const oldLot = await sql`SELECT product_id, quantity FROM lots WHERE id = ${lotId}`;
+  if (oldLot.length === 0) return false;
+  
+  const pId = oldLot[0].product_id;
+  const oldQty = parseQuantity(oldLot[0].quantity);
+  const newQty = parseQuantity(payload.quantity);
   const expDate = payload.expirationDate || null;
+  
+  // 2. Guardar los nuevos valores en el registro
   await sql`
     UPDATE lots 
     SET expiration_date = ${expDate},
-        source_reference = ${payload.reference || ''}
+        source_reference = ${payload.reference || ''},
+        quantity = ${newQty}
     WHERE id = ${lotId}
   `;
+  
+  // 3. Si es una salida (número negativo), recalcular las unidades vendidas (total_out) del producto
+  const oldOut = oldQty < 0 ? Math.abs(oldQty) : 0;
+  const newOut = newQty < 0 ? Math.abs(newQty) : 0;
+  const diffOut = newOut - oldOut;
+  
+  if (diffOut !== 0) {
+    await sql`
+      UPDATE products 
+      SET total_out = GREATEST(total_out + ${diffOut}, 0)
+      WHERE id = ${pId}
+    `;
+  }
+  
   return true;
 }
 
