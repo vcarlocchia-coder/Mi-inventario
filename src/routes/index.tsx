@@ -321,7 +321,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   }, [enrichedInventory, search, filterMode, sortBy, sortOrder]);
 
   const dashboardStats = useMemo(() => {
-    // ¡REAGREGADO EL CÁLCULO DE RIESGO!
     let totalUnits = 0, expiringSoon = 0, expired = 0, risk = 0, activeProducts = 0;
     enrichedInventory.forEach((p: any) => {
       totalUnits += p.goodStock;
@@ -420,9 +419,9 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       </header>
 
       <div className="page" id="top">
-        <section className="stats-grid">
-          {/* AHORA SON 5 TARJETAS, INCLUYENDO "RIESGO DE MERMA" */}
-          <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(dashboardStats.totalUnits)} detail={`${dashboardStats.activeProducts} productos activos`} tone="ink" onClick={() => { setFilterMode('all'); setViewTab('inventory'); }} active={filterMode === 'all' && viewTab === 'inventory'} />
+        {/* APLICAMOS DISPLAY GRID CON 5 COLUMNAS PARA QUE QUEDEN EN UNA SOLA LÍNEA */}
+        <section className="stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '16px' }}>
+          <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(dashboardStats.totalUnits)} detail={`${dashboardStats.activeProducts} productos`} tone="ink" onClick={() => { setFilterMode('all'); setViewTab('inventory'); }} active={filterMode === 'all' && viewTab === 'inventory'} />
           <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(dashboardStats.expiringSoon)} detail="bultos críticos" tone="amber" onClick={() => { setFilterMode('expiringSoon'); setViewTab('inventory'); }} active={filterMode === 'expiringSoon' && viewTab === 'inventory'} />
           <StatCard icon={<AlertTriangle />} label="Riesgo de merma" value={numberFormatter.format(dashboardStats.risk)} detail="vencerán antes" tone="rose" onClick={() => { setFilterMode('risk'); setViewTab('inventory'); }} active={filterMode === 'risk' && viewTab === 'inventory'} />
           <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(dashboardStats.expired)} detail="bultos apartados" tone="green" onClick={() => { setFilterMode('expired'); setViewTab('inventory'); }} active={filterMode === 'expired' && viewTab === 'inventory'} />
