@@ -79,7 +79,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
   const [historyTypeFilter, setHistoryTypeFilter] = useState<HistoryTypeFilter>('all')
   
-  // NUEVOS ESTADOS DE FECHA (Rango)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
 
@@ -177,6 +176,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     });
   }, [data.rawProducts, data.rawLots]);
 
+  // EL CEREBRO DE VENTA PERDIDA (Ahora genera un registro por cada DÍA)
   const computedLostSales = useMemo(() => {
     const lost: any[] = [];
     const todayStr = todayIso();
@@ -193,6 +193,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       
       const lotsByDate: Record<string, number> = {};
       pLots.forEach((l: any) => {
+        if(!l.receivedDate) return;
         const d = l.receivedDate.slice(0, 10);
         lotsByDate[d] = (lotsByDate[d] || 0) + Number(l.quantity);
       });
@@ -214,20 +215,36 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
           if (dStr !== nextDStr) {
             const d1 = new Date(`${dStr}T00:00:00Z`);
             const d2 = new Date(`${nextDStr}T00:00:00Z`);
-            const diffDays = Math.round((d2.getTime() - d1.getTime()) / 86400000);
             
-            if (diffDays > 0) {
-              lost.push({
-                id: `hist-lost-${p.id}-${dStr}`,
-                productId: p.id,
-                sku: p.sku,
-                name: p.name,
-                sourceType: 'lost_sale_hist',
-                reference: `Quiebre: ${formatDate(dStr)} al ${nextDStr === todayStr ? 'Hoy' : formatDate(nextDStr)}`,
-                quantity: diffDays * p.avgSales, 
-                receivedDate: dStr,
-                expirationDate: null
-              });
+            // Loop para crear un registro para cada día calendario que pasó sin stock
+            let currentDay = new Date(d1);
+            while (currentDay < d2) {
+              const currentDStr = currentDay.toISOString().slice(0, 10);
+              
+              if (currentDStr < todayStr) {
+                let dayLoss = p.avgSales;
+                
+                // Si estamos en el día exacto que bajó a 0, le restamos lo que sí alcanzó a vender
+                if (currentDStr === dStr) {
+                    const salesThatDay = lotsByDate[dStr] < 0 ? Math.abs(lotsByDate[dStr]) : 0;
+                    dayLoss = Math.max(0, p.avgSales - salesThatDay);
+                }
+                
+                if (dayLoss > 0) {
+                    lost.push({
+                      id: `hist-lost-${p.id}-${currentDStr}`,
+                      productId: p.id,
+                      sku: p.sku,
+                      name: p.name,
+                      sourceType: 'lost_sale_hist',
+                      reference: currentDStr === dStr ? 'Quiebre de stock (Parcial del día)' : 'Quiebre de stock (Día entero sin stock)',
+                      quantity: dayLoss, 
+                      receivedDate: currentDStr,
+                      expirationDate: null
+                    });
+                }
+              }
+              currentDay.setDate(currentDay.getDate() + 1);
             }
           }
         }
@@ -236,21 +253,38 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     return lost.sort((a,b) => new Date(b.receivedDate).getTime() - new Date(a.receivedDate).getTime());
   }, [data.rawLots, enrichedInventory]);
 
+  // VENTAS PERDIDAS HOY (EN VIVO, descontando si vendiste algo temprano hoy)
   const liveLostSalesLots = useMemo(() => {
+    const todayStr = todayIso();
     return enrichedInventory
-      .filter((p: any) => p.goodStock === 0 && p.avgSales > 0)
-      .map((p: any) => ({
-        id: 'live-' + p.id,
-        productId: p.id,
-        sku: p.sku,
-        name: p.name,
-        sourceType: 'lost_sale_live',
-        reference: 'Quiebre actual (Perdiendo Hoy)',
-        quantity: p.avgSales,
-        receivedDate: todayIso(),
-        expirationDate: null
-      }));
-  }, [enrichedInventory]);
+      .filter((p: any) => p.goodStock <= 0 && p.avgSales > 0)
+      .map((p: any) => {
+        // Miramos si hubo ventas reales hoy antes de quedarse en cero
+        const pLots = (data.rawLots || []).filter((l: any) => 
+          (l.productId === p.id || l.sku === p.sku) && 
+          l.sourceType !== 'lost_sale' && 
+          l.sourceType !== 'lost_sale_live' &&
+          l.sourceType !== 'lost_sale_hist' &&
+          l.receivedDate && l.receivedDate.slice(0, 10) === todayStr
+        );
+        const salesToday = pLots.reduce((sum: number, l: any) => sum + (Number(l.quantity) < 0 ? Math.abs(Number(l.quantity)) : 0), 0);
+        const qty = Math.max(0, p.avgSales - salesToday);
+        
+        if (qty === 0) return null;
+        
+        return {
+          id: 'live-' + p.id,
+          productId: p.id,
+          sku: p.sku,
+          name: p.name,
+          sourceType: 'lost_sale_live',
+          reference: 'Quiebre actual (Perdiendo Hoy)',
+          quantity: qty,
+          receivedDate: todayStr,
+          expirationDate: null
+        };
+      }).filter(Boolean);
+  }, [enrichedInventory, data.rawLots]);
 
   const historicalDbLostSales = useMemo(() => {
     return (data.rawLots || [])
@@ -258,8 +292,8 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       .reduce((sum:number, l:any) => sum + Number(l.quantity), 0); 
   }, [data.rawLots]);
 
-  const liveLostSalesCount = liveLostSalesLots.reduce((sum, l) => sum + l.quantity, 0);
-  const computedLostSalesCount = computedLostSales.reduce((sum, l) => sum + l.quantity, 0);
+  const liveLostSalesCount = liveLostSalesLots.reduce((sum:any, l:any) => sum + l.quantity, 0);
+  const computedLostSalesCount = computedLostSales.reduce((sum:any, l:any) => sum + l.quantity, 0);
 
   const finalInventory = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -317,7 +351,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       }
     }
 
-    // FILTRO DE RANGO DE FECHAS
     if (dateFrom) {
       raw = raw.filter((lot: any) => {
         const rDate = lot.receivedDate || '';
@@ -343,7 +376,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     finally { setIsSubmitting(false); }
   }
 
-  // EXPORTADOR INTELIGENTE (Exporta Inventario o Venta Perdida según la pestaña)
   const handleExport = () => {
     if (viewTab === 'lost_sales') {
       const headers = ['SKU', 'Nombre', 'Fecha del Quiebre', 'Bultos Perdidos'];
@@ -436,7 +468,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
 
                   {(viewTab === 'inventory' || viewTab === 'lost_sales') && (
                     <button onClick={handleExport} style={{ background: '#f8fafc', border: '1px solid #cbd5e1', color: '#334155', padding: '0 12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}>
-                      <Download size={15} /> Exportar {viewTab === 'lost_sales' ? 'Pérdidas' : 'Inventario'}
+                      <Download size={15} /> Exportar {viewTab === 'lost_sales' ? 'Pérdidas' : ''}
                     </button>
                   )}
 
@@ -457,7 +489,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                       </div>
                     )}
                     
-                    {/* NUEVO FILTRO DE RANGO DE FECHAS */}
                     <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginLeft: viewTab === 'history' ? 'auto' : '0' }}>
                       <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}><Calendar size={14} /> Desde:</span>
                       <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '13px' }} />
@@ -483,11 +514,10 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                     </div>
                   )}
 
-                  {/* TOTALIZADOR DE PÉRDIDAS PARA EL FILTRO */}
                   {viewTab === 'lost_sales' && historyData.length > 0 && (
                     <div style={{ padding: '8px 20px', background: '#fff1f2', borderBottom: '1px solid #ffe4e6', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <span style={{ fontSize: '13px', color: '#be123c', fontWeight: 600 }}>
-                        📉 Total pérdida en este período: {numberFormatter.format(historyData.reduce((sum: number, l: any) => sum + Number(l.quantity), 0))} bultos
+                        📉 Total pérdida en este filtro: {numberFormatter.format(historyData.reduce((sum: number, l: any) => sum + Number(l.quantity), 0))} bultos
                       </span>
                     </div>
                   )}
@@ -519,7 +549,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                                   <span style={{ marginLeft: '8px', color: '#991b1b', background: '#ffe4e6', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 700 }} title="Están en la estantería pero ya vencieron">+{product.expiredStock} vencidos</span>
                                 )}
                                 {!isShowingExpired && product.goodStock <= 0 && product.avgSales > 0 && (
-                                  <span style={{ marginLeft: '8px', color: '#dc2626', background: '#fef2f2', padding: '2px 6px', borderRadius: '4px', fontSize: '12px', fontWeight: 700 }} title="Estás sin stock hoy">⚠️ Stock 0: Perdiendo {product.avgSales} bultos hoy</span>
+                                  <span style={{ marginLeft: '8px', color: '#dc2626', background: '#fef2f2', padding: '2px 6px', borderRadius: '4px', fontSize: '12px', fontWeight: 700 }} title="Estás sin stock hoy">⚠️ Quiebre activo</span>
                                 )}
                               </p>
                             </div>
