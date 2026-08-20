@@ -2,6 +2,7 @@ import { neon } from '@neondatabase/serverless';
 
 const NEON_URL = "postgresql://neondb_owner:npg_ZI9Ds8WhYtbx@ep-late-base-ach9gmhr-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"; // Mantené tu URL activa
 
+
 function getSql() {
   const connectionString = 
     NEON_URL || 
@@ -133,19 +134,16 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
     const pId = String(lot.productId);
     const countedQuantity = parseQuantity(lot.quantity);
 
-    // Obtener Venta Promedio para poder calcular la pérdida
-    const prodCheck = await sql`SELECT total_out, average_daily_sales FROM products WHERE id = ${pId}`;
-    const currentTotalOut = prodCheck.length > 0 ? parseQuantity(prodCheck[0].total_out) : 0;
-    const avgSales = prodCheck.length > 0 ? parseQuantity(prodCheck[0].average_daily_sales) : 0;
-
-    // Solo sumar stock físico (ignorar los registros de venta perdida)
     const existingLots = await sql`SELECT quantity, source_type FROM lots WHERE product_id = ${pId}`;
     const totalIn = existingLots.reduce((acc: number, l: any) => {
       const q = parseQuantity(l.quantity);
       return (q > 0 && l.source_type !== 'lost_sale') ? acc + q : acc;
     }, 0);
     
+    const prodCheck = await sql`SELECT total_out FROM products WHERE id = ${pId}`;
+    const currentTotalOut = prodCheck.length > 0 ? parseQuantity(prodCheck[0].total_out) : 0;
     const currentStockAvailable = totalIn - currentTotalOut;
+
     const delta = countedQuantity - currentStockAvailable;
 
     if (delta !== 0) {
@@ -174,34 +172,6 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
           ${lot.receivedDate || new Date().toISOString().slice(0, 10)}
         )
       `;
-    }
-
-    // MATEMÁTICA AUTOMÁTICA DE VENTA PERDIDA
-    if (countedQuantity === 0 && avgSales > 0) {
-      let salesMadeYesterday = 0;
-      if (currentStockAvailable > 0 && delta < 0) {
-          salesMadeYesterday = Math.abs(delta);
-      } else if (currentStockAvailable === 0 && delta === 0) {
-          salesMadeYesterday = 0;
-      }
-      
-      const lostQty = avgSales - salesMadeYesterday;
-      
-      if (lostQty > 0) {
-        await sql`
-          INSERT INTO lots (id, product_id, sku, source_type, source_reference, quantity, expiration_date, received_date)
-          VALUES (
-            ${String(crypto.randomUUID())}, 
-            ${pId}, 
-            ${lot.sku || ''}, 
-            'lost_sale', 
-            'Pérdida por Quiebre de Stock', 
-            ${lostQty}, 
-            null, 
-            ${lot.receivedDate || new Date().toISOString().slice(0, 10)}
-          )
-        `;
-      }
     }
   }
 }
@@ -247,7 +217,6 @@ export async function deleteLotRecord(lotId: string, productId: string) {
   const sType = check[0].source_type;
   await sql`DELETE FROM lots WHERE id = ${lotId}`;
   
-  // Solo devolver stock si fue una resta real (no una métrica de venta perdida)
   if (qty < 0 && sType !== 'lost_sale') {
     await sql`
       UPDATE products 
