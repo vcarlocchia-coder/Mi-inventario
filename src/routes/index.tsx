@@ -176,7 +176,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     });
   }, [data.rawProducts, data.rawLots]);
 
-  // EL CEREBRO DE VENTA PERDIDA (Ahora genera un registro por cada DÍA)
   const computedLostSales = useMemo(() => {
     const lost: any[] = [];
     const todayStr = todayIso();
@@ -216,7 +215,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
             const d1 = new Date(`${dStr}T00:00:00Z`);
             const d2 = new Date(`${nextDStr}T00:00:00Z`);
             
-            // Loop para crear un registro para cada día calendario que pasó sin stock
             let currentDay = new Date(d1);
             while (currentDay < d2) {
               const currentDStr = currentDay.toISOString().slice(0, 10);
@@ -224,7 +222,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
               if (currentDStr < todayStr) {
                 let dayLoss = p.avgSales;
                 
-                // Si estamos en el día exacto que bajó a 0, le restamos lo que sí alcanzó a vender
                 if (currentDStr === dStr) {
                     const salesThatDay = lotsByDate[dStr] < 0 ? Math.abs(lotsByDate[dStr]) : 0;
                     dayLoss = Math.max(0, p.avgSales - salesThatDay);
@@ -253,13 +250,11 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     return lost.sort((a,b) => new Date(b.receivedDate).getTime() - new Date(a.receivedDate).getTime());
   }, [data.rawLots, enrichedInventory]);
 
-  // VENTAS PERDIDAS HOY (EN VIVO, descontando si vendiste algo temprano hoy)
   const liveLostSalesLots = useMemo(() => {
     const todayStr = todayIso();
     return enrichedInventory
       .filter((p: any) => p.goodStock <= 0 && p.avgSales > 0)
       .map((p: any) => {
-        // Miramos si hubo ventas reales hoy antes de quedarse en cero
         const pLots = (data.rawLots || []).filter((l: any) => 
           (l.productId === p.id || l.sku === p.sku) && 
           l.sourceType !== 'lost_sale' && 
@@ -326,14 +321,16 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   }, [enrichedInventory, search, filterMode, sortBy, sortOrder]);
 
   const dashboardStats = useMemo(() => {
-    let totalUnits = 0, expiringSoon = 0, expired = 0, activeProducts = 0;
+    // ¡REAGREGADO EL CÁLCULO DE RIESGO!
+    let totalUnits = 0, expiringSoon = 0, expired = 0, risk = 0, activeProducts = 0;
     enrichedInventory.forEach((p: any) => {
       totalUnits += p.goodStock;
       expired += p.expiredStock;
       if (p.isExpiringSoon) expiringSoon += p.goodStock;
+      if (p.isRisk) risk += p.goodStock;
       if (p.goodStock > 0) activeProducts++;
     });
-    return { totalUnits, expiringSoon, expired, activeProducts };
+    return { totalUnits, expiringSoon, expired, risk, activeProducts };
   }, [enrichedInventory]);
 
   const historyData = useMemo(() => {
@@ -424,8 +421,10 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
 
       <div className="page" id="top">
         <section className="stats-grid">
+          {/* AHORA SON 5 TARJETAS, INCLUYENDO "RIESGO DE MERMA" */}
           <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(dashboardStats.totalUnits)} detail={`${dashboardStats.activeProducts} productos activos`} tone="ink" onClick={() => { setFilterMode('all'); setViewTab('inventory'); }} active={filterMode === 'all' && viewTab === 'inventory'} />
           <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(dashboardStats.expiringSoon)} detail="bultos críticos" tone="amber" onClick={() => { setFilterMode('expiringSoon'); setViewTab('inventory'); }} active={filterMode === 'expiringSoon' && viewTab === 'inventory'} />
+          <StatCard icon={<AlertTriangle />} label="Riesgo de merma" value={numberFormatter.format(dashboardStats.risk)} detail="vencerán antes" tone="rose" onClick={() => { setFilterMode('risk'); setViewTab('inventory'); }} active={filterMode === 'risk' && viewTab === 'inventory'} />
           <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(dashboardStats.expired)} detail="bultos apartados" tone="green" onClick={() => { setFilterMode('expired'); setViewTab('inventory'); }} active={filterMode === 'expired' && viewTab === 'inventory'} />
           <StatCard icon={<TrendingDown />} label="Venta Perdida" value={numberFormatter.format(liveLostSalesCount + computedLostSalesCount + historicalDbLostSales)} detail={`Hoy: ${numberFormatter.format(liveLostSalesCount)} bultos`} tone="rose" onClick={() => { setViewTab('lost_sales'); }} active={viewTab === 'lost_sales'} />
         </section>
