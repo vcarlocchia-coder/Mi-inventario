@@ -173,7 +173,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     });
   }, [data.rawProducts, data.rawLots]);
 
-  // EL CEREBRO: CÁLCULO HISTÓRICO RETROACTIVO DE VENTA PERDIDA (Sin tocar BD)
+  // EL CEREBRO: CÁLCULO HISTÓRICO RETROACTIVO DE VENTA PERDIDA (Corregido)
   const computedLostSales = useMemo(() => {
     const lost: any[] = [];
     const todayStr = todayIso();
@@ -181,7 +181,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     enrichedInventory.forEach((p: any) => {
       if (p.avgSales <= 0) return;
       
-      // Agarramos todos los movimientos reales (entradas y salidas) de este producto
       const pLots = (data.rawLots || []).filter((l: any) => 
         (l.productId === p.id || l.sku === p.sku) && 
         l.sourceType !== 'lost_sale' && 
@@ -189,11 +188,10 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
         l.sourceType !== 'lost_sale_hist'
       );
       
-      // Agrupamos el stock día por día para simular el paso del tiempo
       const lotsByDate: Record<string, number> = {};
       pLots.forEach((l: any) => {
         const d = l.receivedDate.slice(0, 10);
-        lotsByDate[d] = (lotsByDate[d] || 0) + parseQuantity(l.quantity);
+        lotsByDate[d] = (lotsByDate[d] || 0) + Number(l.quantity); // <--- Corregido
       });
       
       const sortedDates = Object.keys(lotsByDate).sort();
@@ -201,11 +199,10 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       
       for (let i = 0; i < sortedDates.length; i++) {
         const dStr = sortedDates[i];
-        if (dStr >= todayStr) continue; // Lo de hoy lo calculamos en vivo después
+        if (dStr >= todayStr) continue; 
         
         runningStock += lotsByDate[dStr];
         
-        // Si el stock quedó en cero o menos, calculamos cuántos días pasaron hasta el próximo evento
         if (runningStock <= 0) {
           const nextDStr = (i + 1 < sortedDates.length && sortedDates[i+1] <= todayStr) 
             ? sortedDates[i+1] 
@@ -224,7 +221,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                 name: p.name,
                 sourceType: 'lost_sale_hist',
                 reference: `Quiebre: ${formatDate(dStr)} al ${nextDStr === todayStr ? 'Hoy' : formatDate(nextDStr)}`,
-                quantity: diffDays * p.avgSales, // Días en 0 multiplicado por la venta diaria
+                quantity: diffDays * p.avgSales, 
                 receivedDate: dStr,
                 expirationDate: null
               });
@@ -253,8 +250,15 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       }));
   }, [enrichedInventory]);
 
+  // CÁLCULO HISTÓRICO DE LA BASE DE DATOS
+  const historicalDbLostSales = useMemo(() => {
+    return (data.rawLots || [])
+      .filter((l:any) => l.sourceType === 'lost_sale')
+      .reduce((sum:number, l:any) => sum + Number(l.quantity), 0); // <--- Corregido
+  }, [data.rawLots]);
+
   const liveLostSalesCount = liveLostSalesLots.reduce((sum, l) => sum + l.quantity, 0);
-  const historicalLostSalesCount = computedLostSales.reduce((sum, l) => sum + l.quantity, 0);
+  const computedLostSalesCount = computedLostSales.reduce((sum, l) => sum + l.quantity, 0);
 
   const finalInventory = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -304,10 +308,8 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     }).reverse();
 
     if (viewTab === 'lost_sales') {
-      // Si entra a pérdidas, mezclamos lo retroactivo histórico + lo de hoy en vivo
       raw = [...liveLostSalesLots, ...computedLostSales];
     } else {
-      // Limpiamos los rastros viejos de la base de datos para no mezclar
       raw = raw.filter((lot: any) => lot.sourceType !== 'lost_sale' && lot.sourceType !== 'lost_sale_live' && lot.sourceType !== 'lost_sale_hist');
       if (historyTypeFilter !== 'all') {
         raw = raw.filter((lot: any) => lot.sourceType === historyTypeFilter);
@@ -368,8 +370,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
           <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(dashboardStats.expiringSoon)} detail="bultos críticos" tone="amber" onClick={() => { setFilterMode('expiringSoon'); setViewTab('inventory'); }} active={filterMode === 'expiringSoon' && viewTab === 'inventory'} />
           <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(dashboardStats.expired)} detail="bultos apartados" tone="green" onClick={() => { setFilterMode('expired'); setViewTab('inventory'); }} active={filterMode === 'expired' && viewTab === 'inventory'} />
           
-          {/* NUEVA TARJETA DE PÉRDIDAS */}
-          <StatCard icon={<TrendingDown />} label="Venta Perdida" value={numberFormatter.format(liveLostSalesCount + historicalLostSalesCount)} detail={`Hoy: ${numberFormatter.format(liveLostSalesCount)} bultos`} tone="rose" onClick={() => { setViewTab('lost_sales'); }} active={viewTab === 'lost_sales'} />
+          <StatCard icon={<TrendingDown />} label="Venta Perdida" value={numberFormatter.format(liveLostSalesCount + computedLostSalesCount + historicalDbLostSales)} detail={`Hoy: ${numberFormatter.format(liveLostSalesCount)} bultos`} tone="rose" onClick={() => { setViewTab('lost_sales'); }} active={viewTab === 'lost_sales'} />
         </section>
 
         <div className="workspace" style={{ display: 'flex', gap: '24px' }}>
@@ -442,7 +443,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                       <span style={{ fontSize: '13px', color: '#be123c', fontWeight: 600 }}>⚠️ Estás viendo una lista de {historyData.length} registros</span>
                       <button onClick={async () => {
                         if (confirm(`¿ATENCIÓN: Estás seguro de que querés ELIMINAR ESTOS ${historyData.length} REGISTROS visibles? El stock se revertirá automáticamente a como estaba antes de esta carga.`)) {
-                          const itemsToDel = historyData.map((l:any) => ({ lotId: l.id, productId: l.productId }));
+                          const itemsToDel = historyData.filter((l:any) => l.sourceType !== 'lost_sale_live').map((l:any) => ({ lotId: l.id, productId: l.productId }));
                           if (itemsToDel.length > 0) {
                             await runMutation(() => deleteLotRecordsBatch(itemsToDel), `Se eliminaron ${itemsToDel.length} registros y se ajustó el stock.`);
                           }
@@ -479,7 +480,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                                 {!isShowingExpired && product.expiredStock > 0 && (
                                   <span style={{ marginLeft: '8px', color: '#991b1b', background: '#ffe4e6', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 700 }} title="Están en la estantería pero ya vencieron">+{product.expiredStock} vencidos</span>
                                 )}
-                                {/* CARTEL EN VIVO DE VENTA PERDIDA */}
                                 {!isShowingExpired && product.goodStock <= 0 && product.avgSales > 0 && (
                                   <span style={{ marginLeft: '8px', color: '#dc2626', background: '#fef2f2', padding: '2px 6px', borderRadius: '4px', fontSize: '12px', fontWeight: 700 }} title="Estás sin stock hoy">⚠️ Stock 0: Perdiendo {product.avgSales} bultos hoy</span>
                                 )}
@@ -515,7 +515,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                       const displayQty = qty > 0 ? `+${numberFormatter.format(qty)}` : numberFormatter.format(qty);
                       
                       const isLostSaleLive = lot.sourceType === 'lost_sale_live';
-                      const isLostSaleHist = lot.sourceType === 'lost_sale_hist';
+                      const isLostSaleHist = lot.sourceType === 'lost_sale_hist' || lot.sourceType === 'lost_sale';
                       const isLostSale = isLostSaleLive || isLostSaleHist;
                       
                       const color = isLostSale ? '#e11d48' : (isNeg ? '#dc2626' : '#059669');
