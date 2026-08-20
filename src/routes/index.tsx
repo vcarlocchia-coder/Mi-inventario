@@ -78,7 +78,11 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   const [actionMode, setActionMode] = useState<ActionMode>('initial')
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
   const [historyTypeFilter, setHistoryTypeFilter] = useState<HistoryTypeFilter>('all')
-  const [historyDateFilter, setHistoryDateFilter] = useState('')
+  
+  // NUEVOS ESTADOS DE FECHA (Rango)
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+
   const [viewTab, setViewTab] = useState<ViewTab>('inventory')
   const [search, setSearch] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -173,7 +177,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     });
   }, [data.rawProducts, data.rawLots]);
 
-  // EL CEREBRO: CÁLCULO HISTÓRICO RETROACTIVO DE VENTA PERDIDA (Corregido)
   const computedLostSales = useMemo(() => {
     const lost: any[] = [];
     const todayStr = todayIso();
@@ -191,7 +194,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       const lotsByDate: Record<string, number> = {};
       pLots.forEach((l: any) => {
         const d = l.receivedDate.slice(0, 10);
-        lotsByDate[d] = (lotsByDate[d] || 0) + Number(l.quantity); // <--- Corregido
+        lotsByDate[d] = (lotsByDate[d] || 0) + Number(l.quantity);
       });
       
       const sortedDates = Object.keys(lotsByDate).sort();
@@ -233,7 +236,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     return lost.sort((a,b) => new Date(b.receivedDate).getTime() - new Date(a.receivedDate).getTime());
   }, [data.rawLots, enrichedInventory]);
 
-  // VENTAS PERDIDAS HOY (EN VIVO)
   const liveLostSalesLots = useMemo(() => {
     return enrichedInventory
       .filter((p: any) => p.goodStock === 0 && p.avgSales > 0)
@@ -250,11 +252,10 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       }));
   }, [enrichedInventory]);
 
-  // CÁLCULO HISTÓRICO DE LA BASE DE DATOS
   const historicalDbLostSales = useMemo(() => {
     return (data.rawLots || [])
       .filter((l:any) => l.sourceType === 'lost_sale')
-      .reduce((sum:number, l:any) => sum + Number(l.quantity), 0); // <--- Corregido
+      .reduce((sum:number, l:any) => sum + Number(l.quantity), 0); 
   }, [data.rawLots]);
 
   const liveLostSalesCount = liveLostSalesLots.reduce((sum, l) => sum + l.quantity, 0);
@@ -316,17 +317,24 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       }
     }
 
-    if (historyDateFilter) {
+    // FILTRO DE RANGO DE FECHAS
+    if (dateFrom) {
       raw = raw.filter((lot: any) => {
         const rDate = lot.receivedDate || '';
-        return rDate.startsWith(historyDateFilter);
+        return rDate.slice(0, 10) >= dateFrom;
+      });
+    }
+    if (dateTo) {
+      raw = raw.filter((lot: any) => {
+        const rDate = lot.receivedDate || '';
+        return rDate.slice(0, 10) <= dateTo;
       });
     }
 
     const query = search.trim().toLowerCase();
     if (!query) return raw;
     return raw.filter((lot: any) => lot.sku.toLowerCase().includes(query) || lot.name.toLowerCase().includes(query) || (lot.reference && lot.reference.toLowerCase().includes(query)));
-  }, [data.rawLots, data.rawProducts, search, historyTypeFilter, historyDateFilter, viewTab, liveLostSalesLots, computedLostSales]);
+  }, [data.rawLots, data.rawProducts, search, historyTypeFilter, dateFrom, dateTo, viewTab, liveLostSalesLots, computedLostSales]);
 
   async function runMutation(task: () => Promise<unknown>, successText: string) {
     setMessage(null); setIsSubmitting(true);
@@ -335,16 +343,34 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     finally { setIsSubmitting(false); }
   }
 
-  const handleExportCSV = () => {
-    const headers = ['SKU', 'Nombre', 'Stock Bueno', 'Stock Vencido', 'Próximo Vto (Bueno)'];
-    const rows = finalInventory.map((p: any) => [
-      p.sku, `"${p.name}"`, p.goodStock, p.expiredStock, p.activeExpDate ? p.activeExpDate : 'Sin fecha'
-    ]);
-    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a'); link.href = url; link.setAttribute('download', `Inventario_${todayIso()}.csv`);
-    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+  // EXPORTADOR INTELIGENTE (Exporta Inventario o Venta Perdida según la pestaña)
+  const handleExport = () => {
+    if (viewTab === 'lost_sales') {
+      const headers = ['SKU', 'Nombre', 'Fecha del Quiebre', 'Bultos Perdidos'];
+      const rows = historyData.map((l: any) => [
+        l.sku, 
+        `"${l.name}"`, 
+        formatDate(l.receivedDate), 
+        l.quantity
+      ]);
+      const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a'); 
+      link.href = url; 
+      link.setAttribute('download', `Ventas_Perdidas_${dateFrom || 'Inicio'}_a_${dateTo || todayIso()}.csv`);
+      document.body.appendChild(link); link.click(); document.body.removeChild(link);
+    } else {
+      const headers = ['SKU', 'Nombre', 'Stock Bueno', 'Stock Vencido', 'Próximo Vto (Bueno)'];
+      const rows = finalInventory.map((p: any) => [
+        p.sku, `"${p.name}"`, p.goodStock, p.expiredStock, p.activeExpDate ? p.activeExpDate : 'Sin fecha'
+      ]);
+      const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a'); link.href = url; link.setAttribute('download', `Inventario_${todayIso()}.csv`);
+      document.body.appendChild(link); link.click(); document.body.removeChild(link);
+    }
   };
 
   return (
@@ -369,7 +395,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
           <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(dashboardStats.totalUnits)} detail={`${dashboardStats.activeProducts} productos activos`} tone="ink" onClick={() => { setFilterMode('all'); setViewTab('inventory'); }} active={filterMode === 'all' && viewTab === 'inventory'} />
           <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(dashboardStats.expiringSoon)} detail="bultos críticos" tone="amber" onClick={() => { setFilterMode('expiringSoon'); setViewTab('inventory'); }} active={filterMode === 'expiringSoon' && viewTab === 'inventory'} />
           <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(dashboardStats.expired)} detail="bultos apartados" tone="green" onClick={() => { setFilterMode('expired'); setViewTab('inventory'); }} active={filterMode === 'expired' && viewTab === 'inventory'} />
-          
           <StatCard icon={<TrendingDown />} label="Venta Perdida" value={numberFormatter.format(liveLostSalesCount + computedLostSalesCount + historicalDbLostSales)} detail={`Hoy: ${numberFormatter.format(liveLostSalesCount)} bultos`} tone="rose" onClick={() => { setViewTab('lost_sales'); }} active={viewTab === 'lost_sales'} />
         </section>
 
@@ -409,9 +434,9 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                     </div>
                   )}
 
-                  {viewTab !== 'lost_sales' && (
-                    <button onClick={handleExportCSV} style={{ background: '#f8fafc', border: '1px solid #cbd5e1', color: '#334155', padding: '0 12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}>
-                      <Download size={15} /> Exportar
+                  {(viewTab === 'inventory' || viewTab === 'lost_sales') && (
+                    <button onClick={handleExport} style={{ background: '#f8fafc', border: '1px solid #cbd5e1', color: '#334155', padding: '0 12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}>
+                      <Download size={15} /> Exportar {viewTab === 'lost_sales' ? 'Pérdidas' : 'Inventario'}
                     </button>
                   )}
 
@@ -431,10 +456,14 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                         <button className={`mini-action ${historyTypeFilter === 'adjustment' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('adjustment')}>Ventas / Salidas</button>
                       </div>
                     )}
+                    
+                    {/* NUEVO FILTRO DE RANGO DE FECHAS */}
                     <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginLeft: viewTab === 'history' ? 'auto' : '0' }}>
-                      <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}><Calendar size={14} /> Fecha:</span>
-                      <input type="date" value={historyDateFilter} onChange={(e) => setHistoryDateFilter(e.target.value)} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '13px' }} />
-                      {historyDateFilter && (<button onClick={() => setHistoryDateFilter('')} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}>Limpiar</button>)}
+                      <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}><Calendar size={14} /> Desde:</span>
+                      <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '13px' }} />
+                      <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 600, marginLeft: '4px' }}>Hasta:</span>
+                      <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '13px' }} />
+                      {(dateFrom || dateTo) && (<button onClick={() => { setDateFrom(''); setDateTo(''); }} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}>Limpiar</button>)}
                     </div>
                   </div>
                   
@@ -451,6 +480,15 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                       }} style={{ background: '#e11d48', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <Trash2 size={15} /> Borrar todos los registros de esta lista
                       </button>
+                    </div>
+                  )}
+
+                  {/* TOTALIZADOR DE PÉRDIDAS PARA EL FILTRO */}
+                  {viewTab === 'lost_sales' && historyData.length > 0 && (
+                    <div style={{ padding: '8px 20px', background: '#fff1f2', borderBottom: '1px solid #ffe4e6', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '13px', color: '#be123c', fontWeight: 600 }}>
+                        📉 Total pérdida en este período: {numberFormatter.format(historyData.reduce((sum: number, l: any) => sum + Number(l.quantity), 0))} bultos
+                      </span>
                     </div>
                   )}
                 </>
@@ -579,7 +617,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                         </article>
                       );
                     })
-                  ) : (<div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}><h3>{viewTab === 'lost_sales' ? 'No hay ventas perdidas registradas' : 'Historial vacío para esta búsqueda'}</h3></div>)}
+                  ) : (<div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}><h3>{viewTab === 'lost_sales' ? 'No hay ventas perdidas registradas en este período' : 'Historial vacío para esta búsqueda'}</h3></div>)}
                 </div>
               )}
             </section>
