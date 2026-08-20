@@ -133,53 +133,81 @@ export async function syncAdjustments(productsToUpdate: any[], newLots: any[]) {
     const pId = String(lot.productId);
     const countedQuantity = parseQuantity(lot.quantity);
 
-    const existingLots = await sql`SELECT quantity FROM lots WHERE product_id = ${pId}`;
+    // Obtener Venta Promedio para poder calcular la pérdida
+    const prodCheck = await sql`SELECT total_out, average_daily_sales FROM products WHERE id = ${pId}`;
+    const currentTotalOut = prodCheck.length > 0 ? parseQuantity(prodCheck[0].total_out) : 0;
+    const avgSales = prodCheck.length > 0 ? parseQuantity(prodCheck[0].average_daily_sales) : 0;
+
+    // Solo sumar stock físico (ignorar los registros de venta perdida)
+    const existingLots = await sql`SELECT quantity, source_type FROM lots WHERE product_id = ${pId}`;
     const totalIn = existingLots.reduce((acc: number, l: any) => {
       const q = parseQuantity(l.quantity);
-      return q > 0 ? acc + q : acc;
+      return (q > 0 && l.source_type !== 'lost_sale') ? acc + q : acc;
     }, 0);
     
-    const prodCheck = await sql`SELECT total_out FROM products WHERE id = ${pId}`;
-    const currentTotalOut = prodCheck.length > 0 ? parseQuantity(prodCheck[0].total_out) : 0;
     const currentStockAvailable = totalIn - currentTotalOut;
-
     const delta = countedQuantity - currentStockAvailable;
 
-    if (delta === 0) continue; 
+    if (delta !== 0) {
+      const futureTotalIn = delta > 0 ? totalIn + delta : totalIn;
+      let newTotalOut = futureTotalIn - countedQuantity;
+      if (newTotalOut < 0) newTotalOut = 0;
 
-    const futureTotalIn = delta > 0 ? totalIn + delta : totalIn;
-    let newTotalOut = futureTotalIn - countedQuantity;
-    if (newTotalOut < 0) newTotalOut = 0;
+      await sql`
+        UPDATE products 
+        SET total_out = ${newTotalOut}
+        WHERE id = ${pId}
+      `;
 
-    await sql`
-      UPDATE products 
-      SET total_out = ${newTotalOut}
-      WHERE id = ${pId}
-    `;
+      const actionLabel = delta < 0 ? `Venta/Salida (${Math.abs(delta)} bultos)` : `Ajuste Positivo (+${delta} bultos)`;
 
-    const actionLabel = delta < 0 ? `Venta/Salida (${Math.abs(delta)} bultos)` : `Ajuste Positivo (+${delta} bultos)`;
+      await sql`
+        INSERT INTO lots (id, product_id, sku, source_type, source_reference, quantity, expiration_date, received_date)
+        VALUES (
+          ${String(lot.id || crypto.randomUUID())}, 
+          ${pId}, 
+          ${lot.sku || ''}, 
+          'adjustment', 
+          ${actionLabel}, 
+          ${delta}, 
+          ${lot.expirationDate || null}, 
+          ${lot.receivedDate || new Date().toISOString().slice(0, 10)}
+        )
+      `;
+    }
 
-    await sql`
-      INSERT INTO lots (id, product_id, sku, source_type, source_reference, quantity, expiration_date, received_date)
-      VALUES (
-        ${String(lot.id || crypto.randomUUID())}, 
-        ${pId}, 
-        ${lot.sku || ''}, 
-        'adjustment', 
-        ${actionLabel}, 
-        ${delta}, 
-        ${lot.expirationDate || null}, 
-        ${lot.receivedDate || new Date().toISOString().slice(0, 10)}
-      )
-    `;
+    // MATEMÁTICA AUTOMÁTICA DE VENTA PERDIDA
+    if (countedQuantity === 0 && avgSales > 0) {
+      let salesMadeYesterday = 0;
+      if (currentStockAvailable > 0 && delta < 0) {
+          salesMadeYesterday = Math.abs(delta);
+      } else if (currentStockAvailable === 0 && delta === 0) {
+          salesMadeYesterday = 0;
+      }
+      
+      const lostQty = avgSales - salesMadeYesterday;
+      
+      if (lostQty > 0) {
+        await sql`
+          INSERT INTO lots (id, product_id, sku, source_type, source_reference, quantity, expiration_date, received_date)
+          VALUES (
+            ${String(crypto.randomUUID())}, 
+            ${pId}, 
+            ${lot.sku || ''}, 
+            'lost_sale', 
+            'Pérdida por Quiebre de Stock', 
+            ${lostQty}, 
+            null, 
+            ${lot.receivedDate || new Date().toISOString().slice(0, 10)}
+          )
+        `;
+      }
+    }
   }
 }
 
-// FUNCIÓN ACTUALIZADA PARA PERMITIR EDITAR LA CANTIDAD
 export async function updateLotRecord(lotId: string, payload: any) {
   const sql = getSql();
-  
-  // 1. Obtener la cantidad anterior para saber la diferencia
   const oldLot = await sql`SELECT product_id, quantity FROM lots WHERE id = ${lotId}`;
   if (oldLot.length === 0) return false;
   
@@ -188,7 +216,6 @@ export async function updateLotRecord(lotId: string, payload: any) {
   const newQty = parseQuantity(payload.quantity);
   const expDate = payload.expirationDate || null;
   
-  // 2. Guardar los nuevos valores en el registro
   await sql`
     UPDATE lots 
     SET expiration_date = ${expDate},
@@ -197,7 +224,6 @@ export async function updateLotRecord(lotId: string, payload: any) {
     WHERE id = ${lotId}
   `;
   
-  // 3. Si es una salida (número negativo), recalcular las unidades vendidas (total_out) del producto
   const oldOut = oldQty < 0 ? Math.abs(oldQty) : 0;
   const newOut = newQty < 0 ? Math.abs(newQty) : 0;
   const diffOut = newOut - oldOut;
@@ -209,19 +235,20 @@ export async function updateLotRecord(lotId: string, payload: any) {
       WHERE id = ${pId}
     `;
   }
-  
   return true;
 }
 
 export async function deleteLotRecord(lotId: string, productId: string) {
   const sql = getSql();
-  const check = await sql`SELECT quantity FROM lots WHERE id = ${lotId}`;
+  const check = await sql`SELECT quantity, source_type FROM lots WHERE id = ${lotId}`;
   if (check.length === 0) return false;
   
   const qty = parseQuantity(check[0].quantity);
+  const sType = check[0].source_type;
   await sql`DELETE FROM lots WHERE id = ${lotId}`;
   
-  if (qty < 0) {
+  // Solo devolver stock si fue una resta real (no una métrica de venta perdida)
+  if (qty < 0 && sType !== 'lost_sale') {
     await sql`
       UPDATE products 
       SET total_out = GREATEST(total_out - ${Math.abs(qty)}, 0) 
