@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import {
   AlertTriangle, Boxes, CalendarClock, ClipboardPaste, FilePlus2, PackageOpen,
-  ReceiptText, Search, ShieldCheck, Sparkles, Table, Trash2, History, ListFilter, Lock, LogOut, Filter, Calendar, TrendingUp, Edit3, Check, X, Download, ArrowUpDown
+  ReceiptText, Search, ShieldCheck, Sparkles, Table, Trash2, History, ListFilter, Lock, LogOut, Filter, Calendar, TrendingUp, Edit3, Check, X, Download, ArrowUpDown, TrendingDown
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
@@ -13,7 +13,7 @@ export const Route = createFileRoute('/')({ component: InventoryApp })
 type ActionMode = 'initial' | 'receipt' | 'snapshot'
 type FilterMode = 'all' | 'expiringSoon' | 'expired' | 'risk'
 type HistoryTypeFilter = 'all' | 'initial' | 'receipt' | 'adjustment'
-type ViewTab = 'inventory' | 'history'
+type ViewTab = 'inventory' | 'history' | 'lost_sales' // NUEVA PESTAÑA
 type Role = 'admin' | 'viewer'
 
 type SortBy = 'sku' | 'name' | 'stock' | 'expiration'
@@ -109,6 +109,13 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     }
   }
 
+  // CALCULO DEL TOTAL DE VENTAS PERDIDAS
+  const totalLostSales = useMemo(() => {
+    return (data.rawLots || [])
+      .filter((l:any) => l.sourceType === 'lost_sale')
+      .reduce((sum:number, l:any) => sum + parseQuantity(l.quantity), 0);
+  }, [data.rawLots]);
+
   const enrichedInventory = useMemo(() => {
     const today = new Date(todayIso());
     const thirtyDays = new Date(today); thirtyDays.setDate(today.getDate() + 30);
@@ -119,7 +126,10 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       
       let batches: any[] = [];
       if (initialQty > 0) batches.push({ date: prodRaw.expirationDate || '2099-12-31', qty: initialQty });
-      pLots.forEach((l: any) => { if (l.quantity > 0) batches.push({ date: l.expirationDate || '2099-12-31', qty: l.quantity }); });
+      pLots.forEach((l: any) => { 
+        // Excluimos las "Ventas Perdidas" de la suma física del stock
+        if (l.quantity > 0 && l.sourceType !== 'lost_sale') batches.push({ date: l.expirationDate || '2099-12-31', qty: l.quantity }); 
+      });
       batches.sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime());
       
       const totalIn = batches.reduce((s, b) => s + b.qty, 0);
@@ -210,15 +220,14 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   }, [enrichedInventory, search, filterMode, sortBy, sortOrder]);
 
   const dashboardStats = useMemo(() => {
-    let totalUnits = 0, expiringSoon = 0, expired = 0, risk = 0, activeProducts = 0;
+    let totalUnits = 0, expiringSoon = 0, expired = 0, activeProducts = 0;
     enrichedInventory.forEach((p: any) => {
       totalUnits += p.goodStock;
       expired += p.expiredStock;
       if (p.isExpiringSoon) expiringSoon += p.goodStock;
-      if (p.isRisk) risk += p.goodStock;
       if (p.goodStock > 0) activeProducts++;
     });
-    return { totalUnits, expiringSoon, expired, risk, activeProducts };
+    return { totalUnits, expiringSoon, expired, activeProducts };
   }, [enrichedInventory]);
 
   const historyData = useMemo(() => {
@@ -227,8 +236,14 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       return { ...lot, sku: prod?.sku || lot.sku || 'Desconocido', name: prod?.name || 'Producto eliminado', productId: prod?.id || lot.productId }
     }).reverse();
 
-    if (historyTypeFilter !== 'all') {
-      raw = raw.filter((lot: any) => lot.sourceType === historyTypeFilter);
+    // Dividimos la información según la pestaña
+    if (viewTab === 'lost_sales') {
+      raw = raw.filter((lot: any) => lot.sourceType === 'lost_sale');
+    } else {
+      raw = raw.filter((lot: any) => lot.sourceType !== 'lost_sale');
+      if (historyTypeFilter !== 'all') {
+        raw = raw.filter((lot: any) => lot.sourceType === historyTypeFilter);
+      }
     }
 
     if (historyDateFilter) {
@@ -241,7 +256,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     const query = search.trim().toLowerCase();
     if (!query) return raw;
     return raw.filter((lot: any) => lot.sku.toLowerCase().includes(query) || lot.name.toLowerCase().includes(query) || (lot.reference && lot.reference.toLowerCase().includes(query)));
-  }, [data.rawLots, data.rawProducts, search, historyTypeFilter, historyDateFilter]);
+  }, [data.rawLots, data.rawProducts, search, historyTypeFilter, historyDateFilter, viewTab]);
 
   async function runMutation(task: () => Promise<unknown>, successText: string) {
     setMessage(null); setIsSubmitting(true);
@@ -292,8 +307,8 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
         <section className="stats-grid">
           <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(dashboardStats.totalUnits)} detail={`${dashboardStats.activeProducts} productos activos`} tone="ink" onClick={() => { setFilterMode('all'); setViewTab('inventory'); }} active={filterMode === 'all' && viewTab === 'inventory'} />
           <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(dashboardStats.expiringSoon)} detail="bultos críticos" tone="amber" onClick={() => { setFilterMode('expiringSoon'); setViewTab('inventory'); }} active={filterMode === 'expiringSoon' && viewTab === 'inventory'} />
-          <StatCard icon={<AlertTriangle />} label="Riesgo de merma" value={numberFormatter.format(dashboardStats.risk)} detail="vencerán antes" tone="rose" onClick={() => { setFilterMode('risk'); setViewTab('inventory'); }} active={filterMode === 'risk' && viewTab === 'inventory'} />
           <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(dashboardStats.expired)} detail="bultos apartados" tone="green" onClick={() => { setFilterMode('expired'); setViewTab('inventory'); }} active={filterMode === 'expired' && viewTab === 'inventory'} />
+          <StatCard icon={<TrendingDown />} label="Venta Perdida" value={numberFormatter.format(totalLostSales)} detail="bultos históricos" tone="rose" onClick={() => { setViewTab('lost_sales'); }} active={viewTab === 'lost_sales'} />
         </section>
 
         <div className="workspace" style={{ display: 'flex', gap: '24px' }}>
@@ -303,6 +318,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                 <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                   <button onClick={() => setViewTab('inventory')} style={{ background: 'none', border: 'none', fontSize: '20px', fontWeight: viewTab === 'inventory' ? 700 : 400, color: viewTab === 'inventory' ? '#111' : '#666', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}><ListFilter size={20} /> Inventario</button>
                   <button onClick={() => setViewTab('history')} style={{ background: 'none', border: 'none', fontSize: '20px', fontWeight: viewTab === 'history' ? 700 : 400, color: viewTab === 'history' ? '#111' : '#666', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}><History size={20} /> Historial</button>
+                  <button onClick={() => setViewTab('lost_sales')} style={{ background: 'none', border: 'none', fontSize: '20px', fontWeight: viewTab === 'lost_sales' ? 700 : 400, color: viewTab === 'lost_sales' ? '#e11d48' : '#666', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}><TrendingDown size={20} /> Quiebres / Pérdidas</button>
                 </div>
                 
                 <div className="inventory-tools" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -331,32 +347,36 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                     </div>
                   )}
 
-                  <button onClick={handleExportCSV} style={{ background: '#f8fafc', border: '1px solid #cbd5e1', color: '#334155', padding: '0 12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}>
-                    <Download size={15} /> Exportar
-                  </button>
+                  {viewTab !== 'lost_sales' && (
+                    <button onClick={handleExportCSV} style={{ background: '#f8fafc', border: '1px solid #cbd5e1', color: '#334155', padding: '0 12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}>
+                      <Download size={15} /> Exportar
+                    </button>
+                  )}
 
                   {role === 'admin' && (<button onClick={handleClearAll} style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', padding: '0 12px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}><Trash2 size={15} /> Vaciar Todo</button>)}
                 </div>
               </div>
 
-              {viewTab === 'history' && (
+              {(viewTab === 'history' || viewTab === 'lost_sales') && (
                 <>
                   <div style={{ padding: '12px 20px', borderBottom: '1px solid #f1f5f9', display: 'flex', gap: '12px', alignItems: 'center', background: '#fafafa', flexWrap: 'wrap' }}>
-                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                      <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}><Filter size={14} /> Tipo:</span>
-                      <button className={`mini-action ${historyTypeFilter === 'all' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('all')}>Todos</button>
-                      <button className={`mini-action ${historyTypeFilter === 'initial' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('initial')}>Stock Inicial</button>
-                      <button className={`mini-action ${historyTypeFilter === 'receipt' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('receipt')}>Boletas</button>
-                      <button className={`mini-action ${historyTypeFilter === 'adjustment' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('adjustment')}>Ventas / Salidas</button>
-                    </div>
-                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginLeft: 'auto' }}>
+                    {viewTab === 'history' && (
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                        <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}><Filter size={14} /> Tipo:</span>
+                        <button className={`mini-action ${historyTypeFilter === 'all' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('all')}>Todos</button>
+                        <button className={`mini-action ${historyTypeFilter === 'initial' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('initial')}>Stock Inicial</button>
+                        <button className={`mini-action ${historyTypeFilter === 'receipt' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('receipt')}>Boletas</button>
+                        <button className={`mini-action ${historyTypeFilter === 'adjustment' ? 'active' : ''}`} onClick={() => setHistoryTypeFilter('adjustment')}>Ventas / Salidas</button>
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginLeft: viewTab === 'history' ? 'auto' : '0' }}>
                       <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}><Calendar size={14} /> Fecha:</span>
                       <input type="date" value={historyDateFilter} onChange={(e) => setHistoryDateFilter(e.target.value)} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '13px' }} />
                       {historyDateFilter && (<button onClick={() => setHistoryDateFilter('')} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}>Limpiar</button>)}
                     </div>
                   </div>
                   
-                  {role === 'admin' && historyData.length > 0 && (
+                  {role === 'admin' && historyData.length > 0 && viewTab === 'history' && (
                     <div style={{ padding: '8px 20px', background: '#fff1f2', borderBottom: '1px solid #ffe4e6', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <span style={{ fontSize: '13px', color: '#be123c', fontWeight: 600 }}>⚠️ Estás viendo una lista de {historyData.length} registros</span>
                       <button onClick={async () => {
@@ -396,6 +416,10 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                                 {!isShowingExpired && product.expiredStock > 0 && (
                                   <span style={{ marginLeft: '8px', color: '#991b1b', background: '#ffe4e6', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 700 }} title="Están en la estantería pero ya vencieron">+{product.expiredStock} vencidos</span>
                                 )}
+                                {/* CARTEL EN VIVO DE VENTA PERDIDA */}
+                                {!isShowingExpired && product.currentStock === 0 && product.avgSales > 0 && (
+                                  <span style={{ marginLeft: '8px', color: '#dc2626', background: '#fef2f2', padding: '2px 6px', borderRadius: '4px', fontSize: '12px', fontWeight: 700 }} title="Estás sin stock hoy">⚠️ Stock 0: Perdiendo {product.avgSales} bultos/día</span>
+                                )}
                               </p>
                             </div>
                           </div>
@@ -426,17 +450,20 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                       const qty = lot.quantity || 0;
                       const isNeg = qty < 0;
                       const displayQty = qty > 0 ? `+${numberFormatter.format(qty)}` : numberFormatter.format(qty);
-                      const color = isNeg ? '#dc2626' : '#059669';
-                      const typeLabel = lot.sourceType === 'initial' ? 'STOCK INICIAL' : (lot.sourceType === 'receipt' ? 'BOLETA' : 'VENTA / SALIDA');
+                      
+                      // Configuración especial para la pestaña de Ventas Perdidas
+                      const isLostSale = lot.sourceType === 'lost_sale';
+                      const color = isLostSale ? '#e11d48' : (isNeg ? '#dc2626' : '#059669');
+                      const typeLabel = isLostSale ? 'VENTA PERDIDA' : (lot.sourceType === 'initial' ? 'STOCK INICIAL' : (lot.sourceType === 'receipt' ? 'BOLETA' : 'VENTA / SALIDA'));
                       const isEditing = editLotId === lot.id;
 
                       return (
                         <article className="product-row" key={lot.id || idx}>
                           <div className="product-identity" style={{ flex: 1 }}>
-                            <span className="sku-tag" style={{ background: '#eef2ff', color: '#4f46e5' }}>{lot.sku}</span>
+                            <span className="sku-tag" style={{ background: isLostSale ? '#ffe4e6' : '#eef2ff', color: isLostSale ? '#e11d48' : '#4f46e5' }}>{lot.sku}</span>
                             <div>
                               <h3>{lot.name}</h3>
-                              {isEditing ? (
+                              {isEditing && !isLostSale ? (
                                 <div style={{ display: 'flex', gap: '8px', marginTop: '6px', flexWrap: 'wrap' }}>
                                   <label style={{ display: 'flex', flexDirection: 'column', fontSize: '11px', color: '#666', width: '70px' }}>Cant.
                                     <input type="number" step="any" value={editLotData.quantity} onChange={e => setEditLotData({...editLotData, quantity: e.target.value})} style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px' }} />
@@ -450,18 +477,18 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                                 </div>
                               ) : (
                                 <p style={{ color: '#666', fontSize: '13px' }}>
-                                  <span style={{ fontWeight: 600, color: '#0f172a' }}>[{typeLabel}]</span> {lot.reference} | 📅 {formatDate(lot.receivedDate || todayIso())} {lot.expirationDate ? `| 🗓️ Vence: ${formatDate(lot.expirationDate)}` : ''}
+                                  <span style={{ fontWeight: 600, color: isLostSale ? '#be123c' : '#0f172a' }}>[{typeLabel}]</span> {lot.reference} | 📅 {formatDate(lot.receivedDate || todayIso())} {lot.expirationDate && !isLostSale ? `| 🗓️ Vence: ${formatDate(lot.expirationDate)}` : ''}
                                 </p>
                               )}
                             </div>
                           </div>
                           <div className="stock-number" style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                             <div style={{ textAlign: 'right' }}>
-                              <strong style={{ color }}>{displayQty}</strong>
+                              <strong style={{ color }}>{isLostSale ? `-${numberFormatter.format(qty)}` : displayQty}</strong>
                               <span style={{ display: 'block', fontSize: '12px', color: '#64748b' }}>bultos</span>
                             </div>
                             {role === 'admin' && (
-                              isEditing ? (
+                              isEditing && !isLostSale ? (
                                 <div style={{ display: 'flex', gap: '6px' }}>
                                   <button onClick={async () => {
                                     await runMutation(() => updateLotRecord(lot.id, editLotData), 'Historial corregido.');
@@ -471,13 +498,15 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                                 </div>
                               ) : (
                                 <div style={{ display: 'flex', gap: '6px' }}>
-                                  <button onClick={() => {
-                                    setEditLotId(lot.id);
-                                    setEditLotData({ expirationDate: lot.expirationDate || '', reference: lot.reference || '', quantity: String(lot.quantity || 0) });
-                                  }} style={{ background: '#f1f5f9', border: '1px solid #e2e8f0', color: '#64748b', cursor: 'pointer', padding: '6px', borderRadius: '6px' }} title="Editar"><Edit3 size={15} /></button>
+                                  {!isLostSale && (
+                                    <button onClick={() => {
+                                      setEditLotId(lot.id);
+                                      setEditLotData({ expirationDate: lot.expirationDate || '', reference: lot.reference || '', quantity: String(lot.quantity || 0) });
+                                    }} style={{ background: '#f1f5f9', border: '1px solid #e2e8f0', color: '#64748b', cursor: 'pointer', padding: '6px', borderRadius: '6px' }} title="Editar"><Edit3 size={15} /></button>
+                                  )}
                                   <button onClick={async () => {
-                                    if(confirm('¿Seguro que querés borrar este registro de la historia? El stock se recalculará automáticamente.')) {
-                                      await runMutation(() => deleteLotRecord(lot.id, lot.productId), 'Registro borrado y stock devuelto.');
+                                    if(confirm(isLostSale ? '¿Seguro que querés borrar este registro de Venta Perdida?' : '¿Seguro que querés borrar este registro de la historia? El stock se recalculará automáticamente.')) {
+                                      await runMutation(() => deleteLotRecord(lot.id, lot.productId), 'Registro borrado exitosamente.');
                                     }
                                   }} style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#ef4444', cursor: 'pointer', padding: '6px', borderRadius: '6px' }} title="Borrar del Historial"><Trash2 size={15} /></button>
                                 </div>
@@ -487,7 +516,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                         </article>
                       );
                     })
-                  ) : (<div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}><h3>Historial vacío para esta búsqueda</h3></div>)}
+                  ) : (<div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}><h3>{viewTab === 'lost_sales' ? 'No hay ventas perdidas registradas aún' : 'Historial vacío para esta búsqueda'}</h3></div>)}
                 </div>
               )}
             </section>
@@ -756,7 +785,7 @@ function SnapshotForm({ disabled, onSubmit, onBatchUpdate, enrichedInventory }: 
       ) : (
         <form onSubmit={(e) => void handleSubmit(e)}>
           <label className="field"><span>SKU</span><input value={skuInput} onChange={(e) => setSkuInput(e.target.value)} required /></label>
-          <label className="field"><span>Total Físico</span><input type="number" step="any" value={qtyInput} onChange={(e) => setQtyInput(e.target.value)} required placeholder="Ej: 150" /></label>
+          <label className="field"><span>Total Físico</span><input type="number" step="any" value={qtyInput} onChange={(e) => setQtyInput(e.target.value)} required placeholder="Ej: 0" /></label>
           <button className="submit-button" disabled={disabled} style={{ marginTop: '12px' }}>Guardar Conteo</button>
         </form>
       )}
