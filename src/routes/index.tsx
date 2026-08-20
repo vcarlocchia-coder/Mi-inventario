@@ -13,9 +13,8 @@ export const Route = createFileRoute('/')({ component: InventoryApp })
 type ActionMode = 'initial' | 'receipt' | 'snapshot'
 type FilterMode = 'all' | 'expiringSoon' | 'expired' | 'risk'
 type HistoryTypeFilter = 'all' | 'initial' | 'receipt' | 'adjustment'
-type ViewTab = 'inventory' | 'history' | 'lost_sales' // NUEVA PESTAÑA
+type ViewTab = 'inventory' | 'history' | 'lost_sales'
 type Role = 'admin' | 'viewer'
-
 type SortBy = 'sku' | 'name' | 'stock' | 'expiration'
 type SortOrder = 'asc' | 'desc'
 
@@ -109,13 +108,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     }
   }
 
-  // CALCULO DEL TOTAL DE VENTAS PERDIDAS
-  const totalLostSales = useMemo(() => {
-    return (data.rawLots || [])
-      .filter((l:any) => l.sourceType === 'lost_sale')
-      .reduce((sum:number, l:any) => sum + parseQuantity(l.quantity), 0);
-  }, [data.rawLots]);
-
   const enrichedInventory = useMemo(() => {
     const today = new Date(todayIso());
     const thirtyDays = new Date(today); thirtyDays.setDate(today.getDate() + 30);
@@ -127,7 +119,6 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       let batches: any[] = [];
       if (initialQty > 0) batches.push({ date: prodRaw.expirationDate || '2099-12-31', qty: initialQty });
       pLots.forEach((l: any) => { 
-        // Excluimos las "Ventas Perdidas" de la suma física del stock
         if (l.quantity > 0 && l.sourceType !== 'lost_sale') batches.push({ date: l.expirationDate || '2099-12-31', qty: l.quantity }); 
       });
       batches.sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime());
@@ -182,12 +173,94 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     });
   }, [data.rawProducts, data.rawLots]);
 
+  // EL CEREBRO: CÁLCULO HISTÓRICO RETROACTIVO DE VENTA PERDIDA (Sin tocar BD)
+  const computedLostSales = useMemo(() => {
+    const lost: any[] = [];
+    const todayStr = todayIso();
+    
+    enrichedInventory.forEach((p: any) => {
+      if (p.avgSales <= 0) return;
+      
+      // Agarramos todos los movimientos reales (entradas y salidas) de este producto
+      const pLots = (data.rawLots || []).filter((l: any) => 
+        (l.productId === p.id || l.sku === p.sku) && 
+        l.sourceType !== 'lost_sale' && 
+        l.sourceType !== 'lost_sale_live' &&
+        l.sourceType !== 'lost_sale_hist'
+      );
+      
+      // Agrupamos el stock día por día para simular el paso del tiempo
+      const lotsByDate: Record<string, number> = {};
+      pLots.forEach((l: any) => {
+        const d = l.receivedDate.slice(0, 10);
+        lotsByDate[d] = (lotsByDate[d] || 0) + parseQuantity(l.quantity);
+      });
+      
+      const sortedDates = Object.keys(lotsByDate).sort();
+      let runningStock = 0;
+      
+      for (let i = 0; i < sortedDates.length; i++) {
+        const dStr = sortedDates[i];
+        if (dStr >= todayStr) continue; // Lo de hoy lo calculamos en vivo después
+        
+        runningStock += lotsByDate[dStr];
+        
+        // Si el stock quedó en cero o menos, calculamos cuántos días pasaron hasta el próximo evento
+        if (runningStock <= 0) {
+          const nextDStr = (i + 1 < sortedDates.length && sortedDates[i+1] <= todayStr) 
+            ? sortedDates[i+1] 
+            : todayStr;
+            
+          if (dStr !== nextDStr) {
+            const d1 = new Date(`${dStr}T00:00:00Z`);
+            const d2 = new Date(`${nextDStr}T00:00:00Z`);
+            const diffDays = Math.round((d2.getTime() - d1.getTime()) / 86400000);
+            
+            if (diffDays > 0) {
+              lost.push({
+                id: `hist-lost-${p.id}-${dStr}`,
+                productId: p.id,
+                sku: p.sku,
+                name: p.name,
+                sourceType: 'lost_sale_hist',
+                reference: `Quiebre: ${formatDate(dStr)} al ${nextDStr === todayStr ? 'Hoy' : formatDate(nextDStr)}`,
+                quantity: diffDays * p.avgSales, // Días en 0 multiplicado por la venta diaria
+                receivedDate: dStr,
+                expirationDate: null
+              });
+            }
+          }
+        }
+      }
+    });
+    return lost.sort((a,b) => new Date(b.receivedDate).getTime() - new Date(a.receivedDate).getTime());
+  }, [data.rawLots, enrichedInventory]);
+
+  // VENTAS PERDIDAS HOY (EN VIVO)
+  const liveLostSalesLots = useMemo(() => {
+    return enrichedInventory
+      .filter((p: any) => p.goodStock === 0 && p.avgSales > 0)
+      .map((p: any) => ({
+        id: 'live-' + p.id,
+        productId: p.id,
+        sku: p.sku,
+        name: p.name,
+        sourceType: 'lost_sale_live',
+        reference: 'Quiebre actual (Perdiendo Hoy)',
+        quantity: p.avgSales,
+        receivedDate: todayIso(),
+        expirationDate: null
+      }));
+  }, [enrichedInventory]);
+
+  const liveLostSalesCount = liveLostSalesLots.reduce((sum, l) => sum + l.quantity, 0);
+  const historicalLostSalesCount = computedLostSales.reduce((sum, l) => sum + l.quantity, 0);
+
   const finalInventory = useMemo(() => {
     const query = search.trim().toLowerCase();
     
     const filtered = enrichedInventory.filter((p: any) => {
       if (query && !p.name.toLowerCase().includes(query) && !String(p.sku).toLowerCase().includes(query)) return false;
-      
       if (filterMode === 'all') return p.goodStock > 0 || (p.currentStock === 0 && p.expiredStock === 0);
       if (filterMode === 'expired') return p.expiredStock > 0;
       if (filterMode === 'expiringSoon') return p.isExpiringSoon;
@@ -198,25 +271,19 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     return filtered.sort((a: any, b: any) => {
       const stockKey = filterMode === 'expired' ? 'expiredStock' : 'goodStock';
       let valA, valB;
-      
-      if (sortBy === 'sku') {
-        valA = String(a.sku).toLowerCase(); valB = String(b.sku).toLowerCase();
-      } else if (sortBy === 'name') {
-        valA = String(a.name).toLowerCase(); valB = String(b.name).toLowerCase();
-      } else if (sortBy === 'stock') {
-        valA = a[stockKey]; valB = b[stockKey];
-      } else if (sortBy === 'expiration') {
+      if (sortBy === 'sku') { valA = String(a.sku).toLowerCase(); valB = String(b.sku).toLowerCase(); } 
+      else if (sortBy === 'name') { valA = String(a.name).toLowerCase(); valB = String(b.name).toLowerCase(); } 
+      else if (sortBy === 'stock') { valA = a[stockKey]; valB = b[stockKey]; } 
+      else if (sortBy === 'expiration') {
         const dateKey = filterMode === 'expired' ? 'firstExpiredDate' : 'activeExpDate';
         const farFuture = sortOrder === 'asc' ? Infinity : -Infinity;
         valA = a[dateKey] ? new Date(a[dateKey]).getTime() : farFuture;
         valB = b[dateKey] ? new Date(b[dateKey]).getTime() : farFuture;
       }
-
       if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
       if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
       return 0;
     });
-
   }, [enrichedInventory, search, filterMode, sortBy, sortOrder]);
 
   const dashboardStats = useMemo(() => {
@@ -236,11 +303,12 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
       return { ...lot, sku: prod?.sku || lot.sku || 'Desconocido', name: prod?.name || 'Producto eliminado', productId: prod?.id || lot.productId }
     }).reverse();
 
-    // Dividimos la información según la pestaña
     if (viewTab === 'lost_sales') {
-      raw = raw.filter((lot: any) => lot.sourceType === 'lost_sale');
+      // Si entra a pérdidas, mezclamos lo retroactivo histórico + lo de hoy en vivo
+      raw = [...liveLostSalesLots, ...computedLostSales];
     } else {
-      raw = raw.filter((lot: any) => lot.sourceType !== 'lost_sale');
+      // Limpiamos los rastros viejos de la base de datos para no mezclar
+      raw = raw.filter((lot: any) => lot.sourceType !== 'lost_sale' && lot.sourceType !== 'lost_sale_live' && lot.sourceType !== 'lost_sale_hist');
       if (historyTypeFilter !== 'all') {
         raw = raw.filter((lot: any) => lot.sourceType === historyTypeFilter);
       }
@@ -256,7 +324,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
     const query = search.trim().toLowerCase();
     if (!query) return raw;
     return raw.filter((lot: any) => lot.sku.toLowerCase().includes(query) || lot.name.toLowerCase().includes(query) || (lot.reference && lot.reference.toLowerCase().includes(query)));
-  }, [data.rawLots, data.rawProducts, search, historyTypeFilter, historyDateFilter, viewTab]);
+  }, [data.rawLots, data.rawProducts, search, historyTypeFilter, historyDateFilter, viewTab, liveLostSalesLots, computedLostSales]);
 
   async function runMutation(task: () => Promise<unknown>, successText: string) {
     setMessage(null); setIsSubmitting(true);
@@ -268,22 +336,13 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
   const handleExportCSV = () => {
     const headers = ['SKU', 'Nombre', 'Stock Bueno', 'Stock Vencido', 'Próximo Vto (Bueno)'];
     const rows = finalInventory.map((p: any) => [
-      p.sku,
-      `"${p.name}"`, 
-      p.goodStock,
-      p.expiredStock,
-      p.activeExpDate ? p.activeExpDate : 'Sin fecha'
+      p.sku, `"${p.name}"`, p.goodStock, p.expiredStock, p.activeExpDate ? p.activeExpDate : 'Sin fecha'
     ]);
-    
     const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `Inventario_${todayIso()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const link = document.createElement('a'); link.href = url; link.setAttribute('download', `Inventario_${todayIso()}.csv`);
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
   };
 
   return (
@@ -308,7 +367,9 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
           <StatCard icon={<PackageOpen />} label="Stock disponible" value={numberFormatter.format(dashboardStats.totalUnits)} detail={`${dashboardStats.activeProducts} productos activos`} tone="ink" onClick={() => { setFilterMode('all'); setViewTab('inventory'); }} active={filterMode === 'all' && viewTab === 'inventory'} />
           <StatCard icon={<CalendarClock />} label="Vence en 30 días" value={numberFormatter.format(dashboardStats.expiringSoon)} detail="bultos críticos" tone="amber" onClick={() => { setFilterMode('expiringSoon'); setViewTab('inventory'); }} active={filterMode === 'expiringSoon' && viewTab === 'inventory'} />
           <StatCard icon={<ShieldCheck />} label="Stock vencido" value={numberFormatter.format(dashboardStats.expired)} detail="bultos apartados" tone="green" onClick={() => { setFilterMode('expired'); setViewTab('inventory'); }} active={filterMode === 'expired' && viewTab === 'inventory'} />
-          <StatCard icon={<TrendingDown />} label="Venta Perdida" value={numberFormatter.format(totalLostSales)} detail="bultos históricos" tone="rose" onClick={() => { setViewTab('lost_sales'); }} active={viewTab === 'lost_sales'} />
+          
+          {/* NUEVA TARJETA DE PÉRDIDAS */}
+          <StatCard icon={<TrendingDown />} label="Venta Perdida" value={numberFormatter.format(liveLostSalesCount + historicalLostSalesCount)} detail={`Hoy: ${numberFormatter.format(liveLostSalesCount)} bultos`} tone="rose" onClick={() => { setViewTab('lost_sales'); }} active={viewTab === 'lost_sales'} />
         </section>
 
         <div className="workspace" style={{ display: 'flex', gap: '24px' }}>
@@ -382,7 +443,9 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                       <button onClick={async () => {
                         if (confirm(`¿ATENCIÓN: Estás seguro de que querés ELIMINAR ESTOS ${historyData.length} REGISTROS visibles? El stock se revertirá automáticamente a como estaba antes de esta carga.`)) {
                           const itemsToDel = historyData.map((l:any) => ({ lotId: l.id, productId: l.productId }));
-                          await runMutation(() => deleteLotRecordsBatch(itemsToDel), `Se eliminaron ${itemsToDel.length} registros y se ajustó el stock.`);
+                          if (itemsToDel.length > 0) {
+                            await runMutation(() => deleteLotRecordsBatch(itemsToDel), `Se eliminaron ${itemsToDel.length} registros y se ajustó el stock.`);
+                          }
                         }
                       }} style={{ background: '#e11d48', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <Trash2 size={15} /> Borrar todos los registros de esta lista
@@ -417,8 +480,8 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                                   <span style={{ marginLeft: '8px', color: '#991b1b', background: '#ffe4e6', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 700 }} title="Están en la estantería pero ya vencieron">+{product.expiredStock} vencidos</span>
                                 )}
                                 {/* CARTEL EN VIVO DE VENTA PERDIDA */}
-                                {!isShowingExpired && product.currentStock === 0 && product.avgSales > 0 && (
-                                  <span style={{ marginLeft: '8px', color: '#dc2626', background: '#fef2f2', padding: '2px 6px', borderRadius: '4px', fontSize: '12px', fontWeight: 700 }} title="Estás sin stock hoy">⚠️ Stock 0: Perdiendo {product.avgSales} bultos/día</span>
+                                {!isShowingExpired && product.goodStock <= 0 && product.avgSales > 0 && (
+                                  <span style={{ marginLeft: '8px', color: '#dc2626', background: '#fef2f2', padding: '2px 6px', borderRadius: '4px', fontSize: '12px', fontWeight: 700 }} title="Estás sin stock hoy">⚠️ Stock 0: Perdiendo {product.avgSales} bultos hoy</span>
                                 )}
                               </p>
                             </div>
@@ -451,10 +514,12 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                       const isNeg = qty < 0;
                       const displayQty = qty > 0 ? `+${numberFormatter.format(qty)}` : numberFormatter.format(qty);
                       
-                      // Configuración especial para la pestaña de Ventas Perdidas
-                      const isLostSale = lot.sourceType === 'lost_sale';
+                      const isLostSaleLive = lot.sourceType === 'lost_sale_live';
+                      const isLostSaleHist = lot.sourceType === 'lost_sale_hist';
+                      const isLostSale = isLostSaleLive || isLostSaleHist;
+                      
                       const color = isLostSale ? '#e11d48' : (isNeg ? '#dc2626' : '#059669');
-                      const typeLabel = isLostSale ? 'VENTA PERDIDA' : (lot.sourceType === 'initial' ? 'STOCK INICIAL' : (lot.sourceType === 'receipt' ? 'BOLETA' : 'VENTA / SALIDA'));
+                      const typeLabel = isLostSaleLive ? 'EN VIVO (HOY)' : (isLostSaleHist ? 'VENTA PERDIDA' : (lot.sourceType === 'initial' ? 'STOCK INICIAL' : (lot.sourceType === 'receipt' ? 'BOLETA' : 'VENTA / SALIDA')));
                       const isEditing = editLotId === lot.id;
 
                       return (
@@ -487,8 +552,8 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                               <strong style={{ color }}>{isLostSale ? `-${numberFormatter.format(qty)}` : displayQty}</strong>
                               <span style={{ display: 'block', fontSize: '12px', color: '#64748b' }}>bultos</span>
                             </div>
-                            {role === 'admin' && (
-                              isEditing && !isLostSale ? (
+                            {role === 'admin' && !isLostSale && (
+                              isEditing ? (
                                 <div style={{ display: 'flex', gap: '6px' }}>
                                   <button onClick={async () => {
                                     await runMutation(() => updateLotRecord(lot.id, editLotData), 'Historial corregido.');
@@ -498,14 +563,12 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                                 </div>
                               ) : (
                                 <div style={{ display: 'flex', gap: '6px' }}>
-                                  {!isLostSale && (
-                                    <button onClick={() => {
-                                      setEditLotId(lot.id);
-                                      setEditLotData({ expirationDate: lot.expirationDate || '', reference: lot.reference || '', quantity: String(lot.quantity || 0) });
-                                    }} style={{ background: '#f1f5f9', border: '1px solid #e2e8f0', color: '#64748b', cursor: 'pointer', padding: '6px', borderRadius: '6px' }} title="Editar"><Edit3 size={15} /></button>
-                                  )}
+                                  <button onClick={() => {
+                                    setEditLotId(lot.id);
+                                    setEditLotData({ expirationDate: lot.expirationDate || '', reference: lot.reference || '', quantity: String(lot.quantity || 0) });
+                                  }} style={{ background: '#f1f5f9', border: '1px solid #e2e8f0', color: '#64748b', cursor: 'pointer', padding: '6px', borderRadius: '6px' }} title="Editar"><Edit3 size={15} /></button>
                                   <button onClick={async () => {
-                                    if(confirm(isLostSale ? '¿Seguro que querés borrar este registro de Venta Perdida?' : '¿Seguro que querés borrar este registro de la historia? El stock se recalculará automáticamente.')) {
+                                    if(confirm('¿Seguro que querés borrar este registro de la historia? El stock se recalculará automáticamente.')) {
                                       await runMutation(() => deleteLotRecord(lot.id, lot.productId), 'Registro borrado exitosamente.');
                                     }
                                   }} style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#ef4444', cursor: 'pointer', padding: '6px', borderRadius: '6px' }} title="Borrar del Historial"><Trash2 size={15} /></button>
@@ -516,7 +579,7 @@ function InventoryDashboard({ role, onLogout }: { role: Role, onLogout: () => vo
                         </article>
                       );
                     })
-                  ) : (<div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}><h3>{viewTab === 'lost_sales' ? 'No hay ventas perdidas registradas aún' : 'Historial vacío para esta búsqueda'}</h3></div>)}
+                  ) : (<div className="empty-state" style={{ padding: '32px', textAlign: 'center' }}><h3>{viewTab === 'lost_sales' ? 'No hay ventas perdidas registradas' : 'Historial vacío para esta búsqueda'}</h3></div>)}
                 </div>
               )}
             </section>
